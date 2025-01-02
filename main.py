@@ -220,6 +220,7 @@ best_val_loss = None
 
 # At any point you can hit Ctrl + C to break out of training early.
 file = 'saved_models/' + args.model + '/' + args.save
+print('saving to ', file)
 try:
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
