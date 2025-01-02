@@ -5,7 +5,7 @@ import math
 import os
 import torch
 import torch.nn as nn
-import torch.onnx
+import torch.onnx   
 
 import data
 import model
@@ -219,6 +219,7 @@ lr = args.lr
 best_val_loss = None
 
 # At any point you can hit Ctrl + C to break out of training early.
+file = 'saved_models/' + args.model + '/' + args.save
 try:
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
@@ -231,8 +232,7 @@ try:
         print('-' * 89)
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
-            print('saving to ')
-            file = args.model + args.save
+            file = 'saved_models/' + args.model + '/' + args.save
             print(f'saving to {file}')
             with open(file, 'wb') as f:
                 torch.save(model, f)
