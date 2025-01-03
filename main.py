@@ -10,7 +10,7 @@ import torch.onnx
 import data
 import model
 
-""" parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
+parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
@@ -51,9 +51,6 @@ parser.add_argument('--nhead', type=int, default=2,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
-
-#the key is this line has to be here for get_batch to be properly initialized ... 
-args = parser.parse_args() """
 
 
 def batchify(data, bsz, device='cpu'):
@@ -166,6 +163,9 @@ def export_onnx(path, batch_size, seq_len):
 
 
 if __name__ == '__main__':
+
+    #the key is this line has to be here for get_batch to be properly initialized ... 
+    args = parser.parse_args()
 
     # Set the random seed manually for reproducibility.
     torch.manual_seed(args.seed)
