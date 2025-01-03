@@ -54,6 +54,10 @@ parser.add_argument('--dry-run', action='store_true',
 args = parser.parse_args()
 print('args: ', args)
 
+from main import foobar
+
+foobar(args)
+
 #we need args to import all the functions from main
 from main import batchify, repackage_hidden, get_batch, train, export_onnx
  
