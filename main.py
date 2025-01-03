@@ -52,8 +52,10 @@ parser.add_argument('--nhead', type=int, default=2,
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 
+args = parser.parse_args()
 
-def batchify(data, bsz):
+
+def batchify(data, bsz, device='cpu'):
     # Work out how cleanly we can divide the dataset into bsz parts.
     nbatch = data.size(0) // bsz
     # Trim off any extra elements that wouldn't cleanly fit (reders).
@@ -81,7 +83,7 @@ def repackage_hidden(h):
 # by the batchify function. The chunks are along dimension 0, corresponding
 # to the seq_len dimension in the LSTM.
 
-def get_batch(source, i):
+def get_batch(source, i, args=args):
     seq_len = min(args.bptt, len(source) - 1 - i)
     data = source[i:i+seq_len]
     target = source[i+1:i+1+seq_len].view(-1)
@@ -158,11 +160,7 @@ def export_onnx(path, batch_size, seq_len):
     torch.onnx.export(model, (dummy_input, hidden), path)
 
 
-
-
 if __name__ == '__main__':
-    args = parser.parse_args()
-    print('args: ', args)
 
     # Set the random seed manually for reproducibility.
     torch.manual_seed(args.seed)
@@ -200,9 +198,9 @@ if __name__ == '__main__':
     # batch processing.
 
     eval_batch_size = 10
-    train_data = batchify(corpus.train, args.batch_size)
-    val_data = batchify(corpus.valid, eval_batch_size)
-    test_data = batchify(corpus.test, eval_batch_size)
+    train_data = batchify(corpus.train, args.batch_size, device=device)
+    val_data = batchify(corpus.valid, eval_batch_size, device=device)
+    test_data = batchify(corpus.test, eval_batch_size, device=device)
 
     ###############################################################################
     # Build the model
