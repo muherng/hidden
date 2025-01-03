@@ -9,9 +9,9 @@ import torch.onnx
 
 import data
 import model
-
+print('before main')
 from main import batchify, repackage_hidden, get_batch, train, export_onnx
-
+print('imported all')
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
@@ -135,6 +135,7 @@ def evaluate(data_source):
 #when running the model, the model is saved in the saved_models folder
 # Load the best saved model.
 file = 'saved_models/' + args.model + '/' + args.save
+print('file: ', file)
 with open(file, 'rb') as f:
     model = torch.load(f)
     # after load the rnn params are not a continuous chunk of memory
