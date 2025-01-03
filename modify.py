@@ -9,9 +9,7 @@ import torch.onnx
 
 import data
 import model
-print('before main')
-from main import batchify, repackage_hidden, get_batch, train, export_onnx
-print('imported all')
+
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
@@ -55,6 +53,9 @@ parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 args = parser.parse_args()
 print('args: ', args)
+
+#we need args to import all the functions from main
+from main import batchify, repackage_hidden, get_batch, train, export_onnx
  
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
@@ -92,9 +93,9 @@ corpus = data.Corpus(args.data)
 # batch processing.
 
 eval_batch_size = 10
-train_data = batchify(corpus.train, args.batch_size)
-val_data = batchify(corpus.valid, eval_batch_size)
-test_data = batchify(corpus.test, eval_batch_size)
+train_data = batchify(corpus.train, args.batch_size, device=device)
+val_data = batchify(corpus.valid, eval_batch_size, device=device)
+test_data = batchify(corpus.test, eval_batch_size, device=device)
 
 ###############################################################################
 # Build the model
@@ -118,10 +119,10 @@ def evaluate(data_source):
     ntokens = len(corpus.dictionary)
     if args.model != 'Transformer':
         hidden = model.init_hidden(eval_batch_size)
-        print('hidden size: ', hidden.size()) 
+        print('hidden: ', hidden) 
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, args.bptt):
-            data, targets = get_batch(data_source, i)
+            data, targets = get_batch(data_source, i, args=args)
             if args.model == 'Transformer':
                 output = model(data)
                 output = output.view(-1, ntokens)
