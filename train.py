@@ -79,11 +79,7 @@ def repackage_hidden(h):
 # Note that despite the name of the function, the subdivison of data is not
 # done along the batch dimension (i.e. dimension 1), since that was handled
 # by the batchify function. The chunks are along dimension 0, corresponding
-# to the seq_len dimension in the LSTM.
-
-def foobar(args): 
-    print('foobar')
-    return 0
+# to the seq_len dimension in the LSTM. 
 
 def get_batch(source, i, args):
     seq_len = min(args.bptt, len(source) - 1 - i)
