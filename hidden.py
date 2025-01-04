@@ -113,11 +113,53 @@ if __name__ == '__main__':
                     output = model(data)
                     output = output.view(-1, ntokens)
                 else:
-                    
+                    print('data size: ', data.size())
                     output, hidden = model(data, hidden)
                     hidden = repackage_hidden(hidden)
                 total_loss += len(data) * criterion(output, targets).item()
         return total_loss / (len(data_source) - 1)
+
+    def collect_hidden_states(data_source): 
+        # Turn on evaluation mode which disables dropout.
+        model.eval()
+        ntokens = len(corpus.dictionary)
+        hidden = model.init_hidden(eval_batch_size)
+        print('hidden: ', hidden) 
+        h_data = []
+        c_data = []
+        with torch.no_grad():
+            for i in range(0, data_source.size(0) - 1, args.bptt):
+                data, targets = get_batch(data_source, i, args=args)
+                if data.size(0) != args.bptt:
+                    print('skip data size: ', data.size())
+                    continue
+                h_list = []
+                c_list = []
+                for t in range(data.size(0)): 
+                    curr_timestep = data[t:t+1]
+                    #print("curr_timestep size: ", curr_timestep.size())
+                    #print('curr_timestep: ', curr_timestep)
+                    output, hidden = model(curr_timestep, hidden)
+                    hidden = repackage_hidden(hidden)
+                    # Save hidden/cell states for this timestep
+                    (h,c) = hidden
+                    h_list.append(h.unsqueeze(0))  # shape => (1, num_layers, batch_size, hidden_size)
+                    c_list.append(c.unsqueeze(0))  # shape => (1, num_layers, batch_size, hidden_size)
+                # Concatenate along the first dimension (time)
+                h_all = torch.cat(h_list, dim=0)   # (seq_len, num_layers, batch_size, hidden_size)
+                c_all = torch.cat(c_list, dim=0)   # (seq_len, num_layers, batch_size, hidden_size)
+                print("h_all shape:", h_all.shape)  # (seq_len, num_layers, batch_size, hidden_size)
+                print("c_all shape:", c_all.shape)  # (seq_len, num_layers, batch_size, hidden_size)
+                h_data.append(h_all)
+                c_data.append(c_all)
+        h_data = torch.cat(h_data,dim=2)
+        c_data = torch.cat(c_data,dim=2)  
+        print("h_data shape:", h_data.shape)
+        print("c_data shape:", c_data.shape)
+        # Save hidden states to file
+        torch.save(h_data, 'hidden_states/h_data.pt')
+        torch.save(c_data, 'hidden_states/c_data.pt')  
+        return 
 
 
     #when running the model, the model is saved in the saved_models folder
@@ -133,11 +175,14 @@ if __name__ == '__main__':
             model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss = evaluate(test_data)
-    print('=' * 89)
-    print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
-        test_loss, math.exp(test_loss)))
-    print('=' * 89)
+    #test_loss = evaluate(test_data)
+    #print('=' * 89)
+    #print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+    #    test_loss, math.exp(test_loss)))
+    #print('=' * 89)
+
+    #collect hidden states
+    collect_hidden_states(test_data)
 
     if len(args.onnx_export) > 0:
         # Export the model in ONNX format.
