@@ -98,21 +98,6 @@ if __name__ == '__main__':
     val_data = batchify(corpus.valid, eval_batch_size, device=device)
     test_data = batchify(corpus.test, eval_batch_size, device=device)
 
-    ###############################################################################
-    # Build the model
-    ###############################################################################
-
-    ntokens = len(corpus.dictionary)
-    if args.model == 'Transformer':
-        model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
-    else:
-        model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
-
-    criterion = nn.NLLLoss()
-
-    ###############################################################################
-
-
     def evaluate(data_source):
         # Turn on evaluation mode which disables dropout.
         model.eval()
