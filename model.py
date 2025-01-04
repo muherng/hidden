@@ -46,6 +46,9 @@ class RNNModel(nn.Module):
         nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, input, hidden):
+        print('hidden size: ', hidden[0].size())
+        print('cell size: ', hidden[1].size())
+        print('input size: ', input.size())
         emb = self.drop(self.encoder(input))
         output, hidden = self.rnn(emb, hidden)
         output = self.drop(output)
