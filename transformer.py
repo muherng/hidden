@@ -276,6 +276,11 @@ if __name__ == "__main__":
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
 
+    from torch.nn.functional import mse_loss
+    random_preds = torch.rand(16, 30, 200)  # Simulate random predictions
+    random_labels = torch.rand(16, 30, 200)  # Random labels
+    print("MSE Loss for random predictions:", mse_loss(random_preds, random_labels))
+
 #TODO's train/test split, evaluation, logging, etc. 
 #saving checkpoints. 
 
