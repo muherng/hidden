@@ -2,9 +2,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import PreTrainedModel, GPT2Config
-from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2LayerNorm
+from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
 
+
+# Check if CUDA is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
 # ----------------------------------------------------
 # 1. Synthetic Dataset of Random Vectors
 # ----------------------------------------------------
@@ -86,7 +90,7 @@ class VectorGPTModel(PreTrainedModel):
         self.h = nn.ModuleList([GPT2Block(config) for _ in range(config.n_layer)])
         
         # 4. Final layer norm
-        self.ln_f = GPT2LayerNorm(self.hidden_dim, eps=config.layer_norm_epsilon)
+        self.ln_f = nn.LayerNorm(self.hidden_dim, eps=config.layer_norm_epsilon)
         
         # 5. Output projection: hidden_dim -> 200
         self.output_projection = nn.Linear(self.hidden_dim, self.input_dim)
@@ -142,8 +146,8 @@ if __name__ == "__main__":
     
     # Just take one sample to see shapes
     sample = dataset[0]
-    inputs = sample["inputs"].unsqueeze(0)  # (1, 30, 200)
-    labels = sample["labels"].unsqueeze(0)  # (1, 30, 200)
+    inputs = sample["inputs"].unsqueeze(0).to(device)  # (1, 30, 200)
+    labels = sample["labels"].unsqueeze(0).to(device)  # (1, 30, 200)
     
     # Create a small model config & model
     config = VectorGPTConfig(
@@ -152,7 +156,7 @@ if __name__ == "__main__":
         n_layer=2,
         n_head=4
     )
-    model = VectorGPTModel(config)
+    model = VectorGPTModel(config).to(device)
     
     # Forward pass
     out = model(inputs=inputs, labels=labels)
