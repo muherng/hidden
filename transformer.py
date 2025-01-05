@@ -5,6 +5,9 @@ from transformers import PreTrainedModel, GPT2Config
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
 
+#imports for training
+from transformers import TrainingArguments, Trainer
+from transformers.optimization import AdamW, get_scheduler
 
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -137,10 +140,130 @@ class VectorGPTModel(PreTrainedModel):
             logits=logits
         )
 
+
+# ----------------------------------------------------
+# 1. Custom Trainer Class
+# ----------------------------------------------------
+class VectorGPTTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Custom loss computation: Ensure a scalar tensor is returned for loss.
+        """
+        labels = inputs.pop("labels", None)
+        outputs = model(**inputs, labels=labels)  # Forward pass with explicit labels
+        
+        # Extract the loss (already computed in the model)
+        loss = outputs.loss  # This is a scalar tensor
+
+        if return_outputs:
+            return loss, outputs  # Return both loss and outputs if requested
+        else:
+            return loss  # Return only the scalar loss
+
+
+    def create_optimizer(self):
+        """
+        Custom optimizer: PyTorch AdamW with decoupled weight decay.
+        """
+        if self.optimizer is None:
+            optimizer_grouped_parameters = [
+                {
+                    "params": [
+                        p for n, p in self.model.named_parameters() if not any(nd in n for nd in ["bias", "LayerNorm.weight"])
+                    ],
+                    "weight_decay": self.args.weight_decay,
+                },
+                {
+                    "params": [
+                        p for n, p in self.model.named_parameters() if any(nd in n for nd in ["bias", "LayerNorm.weight"])
+                    ],
+                    "weight_decay": 0.0,
+                },
+            ]
+            self.optimizer = torch.optim.AdamW(
+                optimizer_grouped_parameters,
+                lr=self.args.learning_rate,
+                betas=(self.args.adam_beta1, self.args.adam_beta2),
+                eps=self.args.adam_epsilon,
+            )
+        return self.optimizer
+
+    def create_scheduler(self, num_training_steps, optimizer=None):
+        """
+        Custom scheduler: Cosine annealing with warmup.
+        """
+        if self.lr_scheduler is None:
+            self.lr_scheduler = get_scheduler(
+                name="cosine",
+                optimizer=optimizer if optimizer else self.optimizer,
+                num_warmup_steps=self.args.warmup_steps,
+                num_training_steps=num_training_steps,
+            )
+        return self.lr_scheduler
+
+# ----------------------------------------------------
+# 2. Training Script
+# ----------------------------------------------------
+if __name__ == "__main__":
+    # 1. Synthetic dataset
+    dataset = RandomVectorDataset(num_samples=1000, seq_len=30, vector_dim=200)
+    train_size = int(0.8 * len(dataset))
+    eval_size = len(dataset) - train_size
+    train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+
+    # 2. Model configuration and instantiation
+    config = VectorGPTConfig(
+        n_positions=64,  # must be >= 30 (seq_len)
+        n_embd=256,      # hidden dimension
+        n_layer=6,       # transformer layers
+        n_head=8,        # attention heads
+    )
+    model = VectorGPTModel(config)
+
+    # 3. Training arguments
+    training_args = TrainingArguments(
+        output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
+        overwrite_output_dir=True,         # Overwrite existing output dir
+        eval_strategy="epoch",       # Evaluate at the end of each epoch
+        save_strategy="epoch",             # Save checkpoints every epoch
+        logging_dir="./logs",              # Directory for TensorBoard logs
+        logging_steps=50,                  # Log every 50 steps
+        save_total_limit=3,                # Keep only the last 3 checkpoints
+        learning_rate=5e-4,                # Initial learning rate
+        weight_decay=0.01,                 # Weight decay for AdamW
+        adam_beta1=0.9,                    # First momentum parameter
+        adam_beta2=0.98,                   # Second momentum parameter
+        adam_epsilon=1e-6,                 # Epsilon for numerical stability
+        warmup_steps=500,                  # Warmup steps for scheduler
+        per_device_train_batch_size=16,    # Batch size per GPU during training
+        per_device_eval_batch_size=16,     # Batch size per GPU during evaluation
+        gradient_accumulation_steps=1,     # Accumulate gradients over 1 step
+        fp16=True,                         # Use mixed precision (FP16)
+        num_train_epochs=10,               # Total number of epochs
+        report_to="tensorboard",           # Log to TensorBoard
+        seed=42,                           # Set seed for reproducibility
+    )
+
+    # 4. Custom trainer
+    trainer = VectorGPTTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=None,  # Not needed for vector-based tasks
+    )
+
+    # 5. Start training
+    trainer.train()
+
+    # 6. Optional: Evaluate after training
+    results = trainer.evaluate()
+    print("Evaluation Results:", results)
+
 # ----------------------------------------------------
 # Quick Demo (Optional)
 # ----------------------------------------------------
-if __name__ == "__main__":
+""" if __name__ == "__main__":
     # Create a synthetic dataset
     dataset = RandomVectorDataset(num_samples=4, seq_len=30, vector_dim=200)
     
@@ -161,4 +284,4 @@ if __name__ == "__main__":
     # Forward pass
     out = model(inputs=inputs, labels=labels)
     print("Logits shape:", out.logits.shape)  # (1, 30, 200)
-    print("Loss:", out.loss)                  # MSE over shifted positions
+    print("Loss:", out.loss)                  # MSE over shifted positions """
