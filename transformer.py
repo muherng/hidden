@@ -9,6 +9,8 @@ from transformers.modeling_outputs import CausalLMOutput
 from transformers import TrainingArguments, Trainer
 from transformers.optimization import AdamW, get_scheduler
 
+from sklearn.model_selection import train_test_split
+
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
@@ -211,6 +213,19 @@ if __name__ == "__main__":
     eval_size = len(dataset) - train_size
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
 
+    # Train/Validation/Test split
+    train_size = int(0.7 * len(dataset))  # 70% training
+    valid_size = int(0.15 * len(dataset))  # 15% validation
+    test_size = len(dataset) - train_size - valid_size  # 15% test
+
+    train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
+
+    # DataLoaders
+    batch_size = 16
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
         n_positions=64,  # must be >= 30 (seq_len)
@@ -259,6 +274,10 @@ if __name__ == "__main__":
     # 6. Optional: Evaluate after training
     results = trainer.evaluate()
     print("Evaluation Results:", results)
+
+#TODO's train/test split, evaluation, logging, etc. 
+#saving checkpoints. 
+
 
 # ----------------------------------------------------
 # Quick Demo (Optional)
