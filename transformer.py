@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import random_split, Dataset, DataLoader
 from transformers import PreTrainedModel, GPT2Config
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
@@ -22,8 +22,10 @@ class RandomVectorDataset(Dataset):
     Each sample is a sequence of length seq_len (30), where each vector has dimension vector_dim (200).
     We'll generate random floats in [0,1).
     """
-    def __init__(self, num_samples=1000, seq_len=30, vector_dim=200):
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=200, seed=None):
         super().__init__()
+        if seed is not None:
+            torch.manual_seed(seed)  # Ensure reproducibility per split
         self.seq_len = seq_len
         self.vector_dim = vector_dim
         self.data = []
@@ -208,23 +210,16 @@ class VectorGPTTrainer(Trainer):
 # ----------------------------------------------------
 if __name__ == "__main__":
     # 1. Synthetic dataset
-    dataset = RandomVectorDataset(num_samples=1000, seq_len=30, vector_dim=200)
-    train_size = int(0.8 * len(dataset))
-    eval_size = len(dataset) - train_size
-    train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+    dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200)
+    #train_size = int(0.8 * len(dataset))
+    #eval_size = len(dataset) - train_size
+    #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
 
     # Train/Validation/Test split
-    train_size = int(0.7 * len(dataset))  # 70% training
-    valid_size = int(0.15 * len(dataset))  # 15% validation
-    test_size = len(dataset) - train_size - valid_size  # 15% test
-
-    train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
-
-    # DataLoaders
-    batch_size = 16
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    # Synthetic dataset with distinct seeds
+    train_dataset = RandomVectorDataset(num_samples=700, seq_len=30, vector_dim=200, seed=42)
+    valid_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=43)
+    test_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=44)
 
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
@@ -239,32 +234,37 @@ if __name__ == "__main__":
     training_args = TrainingArguments(
         output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
         overwrite_output_dir=True,         # Overwrite existing output dir
-        eval_strategy="epoch",       # Evaluate at the end of each epoch
+        eval_strategy="epoch",             # Evaluate at the end of each epoch
         save_strategy="epoch",             # Save checkpoints every epoch
         logging_dir="./logs",              # Directory for TensorBoard logs
-        logging_steps=50,                  # Log every 50 steps
+        logging_steps=10,                  # Log every 10 steps for finer feedback
         save_total_limit=3,                # Keep only the last 3 checkpoints
-        learning_rate=5e-4,                # Initial learning rate
-        weight_decay=0.01,                 # Weight decay for AdamW
+        load_best_model_at_end=True,       # Load the best model based on validation loss
+        metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
+        greater_is_better=False,           # Lower loss is better
+        learning_rate=3e-4,                # Lower learning rate for stability
+        weight_decay=0.01,                 # Weight decay for regularization
         adam_beta1=0.9,                    # First momentum parameter
         adam_beta2=0.98,                   # Second momentum parameter
         adam_epsilon=1e-6,                 # Epsilon for numerical stability
-        warmup_steps=500,                  # Warmup steps for scheduler
+        warmup_steps=300,                  # Reduced warmup steps
         per_device_train_batch_size=16,    # Batch size per GPU during training
         per_device_eval_batch_size=16,     # Batch size per GPU during evaluation
         gradient_accumulation_steps=1,     # Accumulate gradients over 1 step
         fp16=True,                         # Use mixed precision (FP16)
-        num_train_epochs=10,               # Total number of epochs
+        max_grad_norm=1.0,                 # Gradient clipping
+        num_train_epochs=5,                # Fewer epochs to prevent overfitting
         report_to="tensorboard",           # Log to TensorBoard
         seed=42,                           # Set seed for reproducibility
     )
+
 
     # 4. Custom trainer
     trainer = VectorGPTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=valid_dataset,
         tokenizer=None,  # Not needed for vector-based tasks
     )
 
@@ -272,8 +272,9 @@ if __name__ == "__main__":
     trainer.train()
 
     # 6. Optional: Evaluate after training
-    results = trainer.evaluate()
-    print("Evaluation Results:", results)
+    # Evaluate on test dataset
+    test_results = trainer.evaluate(test_dataset)
+    print("Test Results:", test_results)
 
 #TODO's train/test split, evaluation, logging, etc. 
 #saving checkpoints. 
