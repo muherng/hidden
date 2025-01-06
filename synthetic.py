@@ -112,7 +112,7 @@ class FixedRotationDataset(Dataset):
 
 
 class LinearDynamicsDataset(Dataset):
-    def __init__(self, num_samples=1000, seq_len=30, vector_dim=200, control_dim=200, seed=None):
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, A=None, B=None, seed=None):
         """
         Synthetic dataset based on the linear dynamics x_{t+1} = Ax_t + Bu_t.
 
@@ -129,12 +129,14 @@ class LinearDynamicsDataset(Dataset):
         self.num_samples = num_samples
         self.seq_len = seq_len
         self.vector_dim = vector_dim
-        self.control_dim = control_dim
 
         # Generate rotation matrices A and B
-        self.A = 0.9*self.generate_random_rotation_matrix(vector_dim)
-        self.B = 0.9*self.generate_random_rotation_matrix(control_dim)
-
+        if A is None or B is None: 
+            self.A = self.generate_random_rotation_matrix(vector_dim)
+            self.B = self.generate_random_rotation_matrix(vector_dim)
+        else: 
+            self.A = A
+            self.B = B    
         # Generate the dataset
         self.data = self.generate_sequences()
 
@@ -176,14 +178,14 @@ class LinearDynamicsDataset(Dataset):
             # dividing seq_len by 2 to get the number of time steps (this is ad hoc)
             for _ in range(int(self.seq_len/2)):
                 # Generate random control vector u_t
-                u_t = torch.randn(self.control_dim)
+                u_t = torch.randn(self.vector_dim)
 
                 # Append x_t and u_t to the sequence
                 #sequence.append(torch.cat((x_t, u_t)))
                 sequence.extend([x_t,u_t])
 
                 # Compute x_{t+1} using linear dynamics
-                x_t = self.A @ x_t + self.B @ u_t
+                x_t = torch.tanh(self.A @ x_t + self.B @ u_t)
 
             # Stack the sequence into a tensor
             sequences.append(torch.stack(sequence))
