@@ -12,7 +12,8 @@ from transformers.optimization import AdamW, get_scheduler
 from sklearn.model_selection import train_test_split
 
 #synthetic dataset imports
-from synthetic import RandomVectorDataset, FixedRotationDataset
+from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset
+import argparse
 
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -178,16 +179,36 @@ class VectorGPTTrainer(Trainer):
 # ----------------------------------------------------
 if __name__ == "__main__":
     # 1. Synthetic dataset
-    dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200)
+    #parse args
+    parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
+    parser.add_argument('--data', type=str, default='random',
+                    help='options are [random, rotation, LDS]')
+    args = parser.parse_args()
+    print('args: ', args)
+    if args.data == 'random': 
+        dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
+    if args.data =='rotation':
+        dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
+    if args.data == 'LDS':
+        dataset = LinearDynamicsDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
     #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+    print('len dataset: ', len(dataset.data))
+    print('dataset: ', dataset.data[0].shape)
+
+    # Train/Validation/Test split
+    train_size = int(0.7 * len(dataset))
+    valid_size = int(0.15 * len(dataset))
+    test_size = len(dataset) - train_size - valid_size
+
+    train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
 
     # Train/Validation/Test split
     # Synthetic dataset with distinct seeds
-    train_dataset = RandomVectorDataset(num_samples=700, seq_len=30, vector_dim=200, seed=42)
-    valid_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=43)
-    test_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=44)
+    #train_dataset = RandomVectorDataset(num_samples=700, seq_len=30, vector_dim=200, seed=42)
+    #valid_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=43)
+    #test_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=44)
 
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
@@ -237,17 +258,17 @@ if __name__ == "__main__":
     )
 
     # 5. Start training
-    trainer.train()
+    t         rainer.train()
 
     # 6. Optional: Evaluate after training
     # Evaluate on test dataset
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
 
-    from torch.nn.functional import mse_loss
-    random_preds = torch.rand(16, 30, 200)  # Simulate random predictions
-    random_labels = torch.rand(16, 30, 200)  # Random labels
-    print("MSE Loss for random predictions:", mse_loss(random_preds, random_labels))
+    #from torch.nn.functional import mse_loss
+    #random_preds = torch.rand(16, 30, 200)  # Simulate random predictions
+    #random_labels = torch.rand(16, 30, 200)  # Random labels
+    #print("MSE Loss for random predictions:", mse_loss(random_preds, random_labels))
 
 #TODO's train/test split, evaluation, logging, etc. 
 #saving checkpoints. 
