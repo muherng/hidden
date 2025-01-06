@@ -11,44 +11,12 @@ from transformers.optimization import AdamW, get_scheduler
 
 from sklearn.model_selection import train_test_split
 
+#synthetic dataset imports
+from synthetic import RandomVectorDataset, FixedRotationDataset
+
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
-# ----------------------------------------------------
-# 1. Synthetic Dataset of Random Vectors
-# ----------------------------------------------------
-class RandomVectorDataset(Dataset):
-    """
-    Each sample is a sequence of length seq_len (30), where each vector has dimension vector_dim (200).
-    We'll generate random floats in [0,1).
-    """
-    def __init__(self, num_samples=1000, seq_len=30, vector_dim=200, seed=None):
-        super().__init__()
-        if seed is not None:
-            torch.manual_seed(seed)  # Ensure reproducibility per split
-        self.seq_len = seq_len
-        self.vector_dim = vector_dim
-        self.data = []
-        for _ in range(num_samples):
-            # shape: (seq_len, vector_dim)
-            seq = torch.rand(seq_len, vector_dim)
-            self.data.append(seq)
-    
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        """
-        We'll return a dictionary with 'inputs' and 'labels'.
-        For autoregressive next-step prediction:
-          inputs: shape (seq_len, vector_dim)
-          labels: same shape (seq_len, vector_dim)
-        """
-        seq = self.data[idx]
-        return {
-            "inputs": seq,     # (30, 200)
-            "labels": seq      # also (30, 200) - we'll do shift-by-1 in the model
-        }
 
 # ----------------------------------------------------
 # 2. GPT2-Based Model for Next-Vector Prediction

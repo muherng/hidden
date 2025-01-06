@@ -1,2 +1,4 @@
 saved_models/
 hidden_states/
+logs/
+vector_gpt_trainer/
