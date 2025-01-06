@@ -98,18 +98,7 @@ class VectorGPTModel(PreTrainedModel):
         # 4. Project back to 200-d
         logits = self.output_projection(hidden_states)            # (bsz, seq_len, 200)
         
-        loss = None
-        if labels is not None:
-            # Typical shift-by-1 for next-step prediction:
-            # the output at t matches label at t+1
-            pred = logits[:, :-1, :]                              # (bsz, seq_len-1, 200)
-            tgt  = labels[:, 1:, :]                               # (bsz, seq_len-1, 200)
-            
-            mse_fn = nn.MSELoss()
-            loss = mse_fn(pred, tgt)
-        
         return CausalLMOutput(
-            loss=loss,
             logits=logits
         )
 
