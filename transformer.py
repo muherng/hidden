@@ -112,16 +112,33 @@ class VectorGPTTrainer(Trainer):
         Custom loss computation: Ensure a scalar tensor is returned for loss.
         """
         labels = inputs.pop("labels", None)
-        outputs = model(**inputs, labels=labels)  # Forward pass with explicit labels
+        outputs = model(**inputs)  # Forward pass without labels
         
-        # Extract the loss (already computed in the model)
-        loss = outputs.loss  # This is a scalar tensor
+        # Extract the logits
+        logits = outputs.logits  # (bsz, seq_len, vocab_size)
+        
+        if labels is not None:
+            # Create a mask for every other token, the size of the mask is seq_len - 1 because we are predicting the next token
+            mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len,)
+            mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
+            #print('mask: ', mask)
+            
+            # Apply the mask to predictions and labels
+            pred = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
+            tgt = labels[:, 1:, :]  # (bsz, seq_len, vocab_size)
+            
+            pred = pred[:,mask,:]
+            tgt = tgt[:,mask,:]
+
+            mse_fn = nn.MSELoss()
+            loss = mse_fn(pred, tgt)
+        else:
+            loss = None
 
         if return_outputs:
             return loss, outputs  # Return both loss and outputs if requested
         else:
             return loss  # Return only the scalar loss
-
 
     def create_optimizer(self):
         """
@@ -247,7 +264,7 @@ if __name__ == "__main__":
     )
 
     # 5. Start training
-    t         rainer.train()
+    trainer.train()
 
     # 6. Optional: Evaluate after training
     # Evaluate on test dataset
