@@ -33,6 +33,7 @@ class VectorGPTConfig(GPT2Config):
                  n_embd=256,     # hidden dimension
                  n_layer=4,      # number of transformer layers
                  n_head=4,       # number of attention heads
+                 input_dim=10,   # input vector dimension
                  **kwargs):
         super().__init__(vocab_size=vocab_size,
                          n_positions=n_positions,
@@ -40,6 +41,7 @@ class VectorGPTConfig(GPT2Config):
                          n_layer=n_layer,
                          n_head=n_head,
                          **kwargs)
+        self.input_dim = input_dim
 
 
 class VectorGPTModel(PreTrainedModel):
@@ -53,7 +55,7 @@ class VectorGPTModel(PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-        self.input_dim = 200
+        self.input_dim = config.input_dim
         self.hidden_dim = config.n_embd
         
         # 1. Input embedding: map 200 -> hidden_dim
@@ -199,7 +201,7 @@ if __name__ == "__main__":
     if args.data =='rotation':
         dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data == 'LDS':
-        dataset = LinearDynamicsDataset(num_samples=100000, seq_len=4, vector_dim=200, seed=42)
+        dataset = LinearDynamicsDataset(num_samples=100000, seq_len=4, vector_dim=10, seed=42)
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
     #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
@@ -212,12 +214,6 @@ if __name__ == "__main__":
     test_size = len(dataset) - train_size - valid_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
-
-    # Train/Validation/Test split
-    # Synthetic dataset with distinct seeds
-    #train_dataset = RandomVectorDataset(num_samples=700, seq_len=30, vector_dim=200, seed=42)
-    #valid_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=43)
-    #test_dataset = RandomVectorDataset(num_samples=150, seq_len=30, vector_dim=200, seed=44)
 
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
@@ -271,6 +267,10 @@ if __name__ == "__main__":
 
     # 6. Optional: Evaluate after training
     # Evaluate on test dataset
+    #suspicious of evaluation, change random seed for test dataset 
+    #A = dataset.A
+    #B = dataset.B
+    #test_dataset = LinearDynamicsDataset(num_samples=test_size, seq_len=4, vector_dim=10, A=A, B=B, seed=47)
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
 
@@ -278,33 +278,3 @@ if __name__ == "__main__":
     #random_preds = torch.rand(16, 30, 200)  # Simulate random predictions
     #random_labels = torch.rand(16, 30, 200)  # Random labels
     #print("MSE Loss for random predictions:", mse_loss(random_preds, random_labels))
-
-#TODO's train/test split, evaluation, logging, etc. 
-#saving checkpoints. 
-
-
-# ----------------------------------------------------
-# Quick Demo (Optional)
-# ----------------------------------------------------
-""" if __name__ == "__main__":
-    # Create a synthetic dataset
-    dataset = RandomVectorDataset(num_samples=4, seq_len=30, vector_dim=200)
-    
-    # Just take one sample to see shapes
-    sample = dataset[0]
-    inputs = sample["inputs"].unsqueeze(0).to(device)  # (1, 30, 200)
-    labels = sample["labels"].unsqueeze(0).to(device)  # (1, 30, 200)
-    
-    # Create a small model config & model
-    config = VectorGPTConfig(
-        n_positions=64,   # must be >= 30
-        n_embd=128,
-        n_layer=2,
-        n_head=4
-    )
-    model = VectorGPTModel(config).to(device)
-    
-    # Forward pass
-    out = model(inputs=inputs, labels=labels)
-    print("Logits shape:", out.logits.shape)  # (1, 30, 200)
-    print("Loss:", out.loss)                  # MSE over shifted positions """
