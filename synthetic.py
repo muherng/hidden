@@ -132,8 +132,8 @@ class LinearDynamicsDataset(Dataset):
         self.control_dim = control_dim
 
         # Generate rotation matrices A and B
-        self.A = 0.5*self.generate_random_rotation_matrix(vector_dim)
-        self.B = 0.5*self.generate_random_rotation_matrix(control_dim)
+        self.A = 0.9*self.generate_random_rotation_matrix(vector_dim)
+        self.B = 0.9*self.generate_random_rotation_matrix(control_dim)
 
         # Generate the dataset
         self.data = self.generate_sequences()
