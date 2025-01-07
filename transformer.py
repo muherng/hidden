@@ -194,14 +194,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
     parser.add_argument('--data', type=str, default='random',
                     help='options are [random, rotation, LDS]')
+    parser.add_argument('--input_dim', type=int, default=50,
+                    help='integer input dimension')
     args = parser.parse_args()
+    input_dim = args.input_dim
     print('args: ', args)
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data =='rotation':
         dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data == 'LDS':
-        dataset = LinearDynamicsDataset(num_samples=100000, seq_len=4, vector_dim=10, seed=42)
+        dataset = LinearDynamicsDataset(num_samples=100000, seq_len=4, vector_dim=input_dim, seed=42)
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
     #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
@@ -220,7 +223,8 @@ if __name__ == "__main__":
         n_positions=64,  # must be >= 30 (seq_len)
         n_embd=256,      # hidden dimension
         n_layer=6,       # transformer layers
-        n_head=8,        # attention heads
+        n_head=1,        # attention heads
+        input_dim=input_dim,  # input vector dimension
     )
     model = VectorGPTModel(config)
 
@@ -267,14 +271,5 @@ if __name__ == "__main__":
 
     # 6. Optional: Evaluate after training
     # Evaluate on test dataset
-    #suspicious of evaluation, change random seed for test dataset 
-    #A = dataset.A
-    #B = dataset.B
-    #test_dataset = LinearDynamicsDataset(num_samples=test_size, seq_len=4, vector_dim=10, A=A, B=B, seed=47)
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
-
-    #from torch.nn.functional import mse_loss
-    #random_preds = torch.rand(16, 30, 200)  # Simulate random predictions
-    #random_labels = torch.rand(16, 30, 200)  # Random labels
-    #print("MSE Loss for random predictions:", mse_loss(random_preds, random_labels))
