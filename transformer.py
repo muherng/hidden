@@ -12,7 +12,7 @@ from transformers.optimization import AdamW, get_scheduler
 from sklearn.model_selection import train_test_split
 
 #synthetic dataset imports
-from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset
+from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset
 import argparse
 
 # Check if CUDA is available
@@ -193,11 +193,18 @@ if __name__ == "__main__":
     #parse args
     parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
     parser.add_argument('--data', type=str, default='random',
-                    help='options are [random, rotation, LDS]')
-    parser.add_argument('--input_dim', type=int, default=50,
+                    help='options are [random, rotation, LDS, RNN_TANH]')
+    parser.add_argument('--input_dim', type=int, default=200,
                     help='integer input dimension')
+    parser.add_argument('--num_samples', type=int, default=10**4,
+                    help='number of sequences each of seq_len')
+    parser.add_argument('--seq_len', type=int, default=50,
+                    help='length of each sequence')
+
     args = parser.parse_args()
     input_dim = args.input_dim
+    num_samples = args.num_samples
+    seq_len = args.seq_len
     print('args: ', args)
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
@@ -205,6 +212,8 @@ if __name__ == "__main__":
         dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data == 'LDS':
         dataset = LinearDynamicsDataset(num_samples=100000, seq_len=50, vector_dim=input_dim, seed=42)
+    if args.data == 'RNN_TANH': 
+        dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
