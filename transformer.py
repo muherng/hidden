@@ -196,9 +196,9 @@ if __name__ == "__main__":
                     help='options are [random, rotation, LDS, RNN_TANH]')
     parser.add_argument('--input_dim', type=int, default=200,
                     help='integer input dimension')
-    parser.add_argument('--num_samples', type=int, default=10**4,
+    parser.add_argument('--num_samples', type=int, default=1000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=50,
+    parser.add_argument('--seq_len', type=int, default=10,
                     help='length of each sequence')
 
     args = parser.parse_args()
@@ -211,13 +211,15 @@ if __name__ == "__main__":
     if args.data =='rotation':
         dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data == 'LDS':
-        dataset = LinearDynamicsDataset(num_samples=100000, seq_len=50, vector_dim=input_dim, seed=42)
+        dataset = LinearDynamicsDataset(num_samples=1000, seq_len=50, vector_dim=input_dim, seed=42)
     if args.data == 'RNN_TANH': 
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
     #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+    
+    #TODO: RNN dataset is wrong order (seq_len, batch_size, input_dim) instead of (batch_size, seq_len, input_dim)
     print('len dataset: ', len(dataset.data))
     print('dataset: ', dataset.data[0].shape)
 
