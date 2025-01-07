@@ -42,7 +42,7 @@ class RNNModelWithoutEmbedding(nn.Module):
 #from model import RNNModelWithoutEmbedding
 
 #TODO: Handle deep RNNs
-def collect_hidden_states_RNN(model, seq_len, batch_size, num_batches): 
+def collect_hidden_states_RNN(model, seq_len, batch_size, num_batches, input_dim): 
     # Turn on evaluation mode which disables dropout.
     cot_data = []
     hidden_data = []
@@ -72,8 +72,13 @@ def collect_hidden_states_RNN(model, seq_len, batch_size, num_batches):
             cot_data.append(cot_batch)
     hidden_data = torch.cat(hidden_data,dim=2) 
     cot_data = torch.cat(cot_data,dim=1)
-    print("hidden_data shape:", hidden_data.shape)
-    print('cot_data shape: ', cot_data.size())
+    print("hidden_data shape before permute:", hidden_data.shape)
+    print('cot_data shape before permute: ', cot_data.size())
+    # permute data to be of shape
+    cot_data = cot_data.permute(1,0,2) # (num_batches*batch_size, seq_len, hidden_size)
+    hidden_data = hidden_data.permute(2,0,1,3) # (num_batches*batch_size, seq_len, num_layers, hidden_size)
+    print("cot_data after permute:", cot_data.shape)
+    print("hidden_data after permute:", hidden_data.shape)
     data = {'cot_data': cot_data, 'hidden_data': hidden_data, 'inputs': input_data}
     return data
 
@@ -104,6 +109,6 @@ if __name__ == '__main__':
     seq_len = 10
     input_dim = ninp
 
-    data = collect_hidden_states_RNN(new_model, seq_len, batch_size, num_batches)
+    data = collect_hidden_states_RNN(new_model, seq_len, batch_size, num_batches, input_dim)
     torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
     # Initialize lists to store inputs and hidden states

@@ -191,6 +191,9 @@ class LinearDynamicsDataset(Dataset):
             sequences.append(torch.stack(sequence))
         return sequences
 
+from train import batchify, repackage_hidden, get_batch, train, export_onnx
+from post import RNNModelWithoutEmbedding, collect_hidden_states_RNN
+
 class RNN_TANH_Dataset(Dataset): 
     def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, A=None, B=None, seed=None):
         if seed is not None:
@@ -202,7 +205,8 @@ class RNN_TANH_Dataset(Dataset):
 
         #TODO: generate the dataset 
         #load the dataset
-        self.data = torch.load('hidden_states/RNN_TANH_data.pt')['cot_data']
+        #self.data = torch.load('hidden_states/RNN_TANH_data.pt')['cot_data']
+        self.data = self.generate_sequences()
         print('data size: ', self.data.size())
 
     def __len__(self):
@@ -214,6 +218,34 @@ class RNN_TANH_Dataset(Dataset):
             "labels": self.data[idx]  # Same as inputs for next-step prediction
         }   
     
-    def generate_sequence(self): 
-        
+    def generate_sequences(self): 
+        #Load the original model
+        original_model = torch.load('saved_models/RNN_TANH/model.pt')
+        original_model.eval()  # Set the model to evaluation mode
+
+        # Define the new model
+        rnn_type = 'RNN_TANH'  # or 'GRU', depending on your original model
+        ntoken = original_model.decoder.out_features
+        ninp = original_model.encoder.embedding_dim  # Use the same input dimension as the embedding output
+        nhid = original_model.rnn.hidden_size
+        nlayers = original_model.rnn.num_layers
+        dropout = original_model.drop.p
+
+        new_model = RNNModelWithoutEmbedding(rnn_type, ntoken, ninp, nhid, nlayers, dropout)
+
+        # Load the weights from the original model, skipping the embedding layer
+        new_model.rnn.load_state_dict(original_model.rnn.state_dict())
+        new_model.decoder.load_state_dict(original_model.decoder.state_dict())
+        new_model.eval()
+
+        # Parameters for dataset generation
+        batch_size = 10
+        num_batches = int(self.num_samples/batch_size)  # Number of batches to generate
+        seq_len = self.seq_len
+        input_dim = ninp
+
+        data = collect_hidden_states_RNN(new_model, seq_len, batch_size, num_batches, input_dim)
+        torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
+        # Initialize lists to store inputs and hidden states
+        return data['cot_data']
 
