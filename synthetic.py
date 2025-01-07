@@ -190,3 +190,30 @@ class LinearDynamicsDataset(Dataset):
             # Stack the sequence into a tensor
             sequences.append(torch.stack(sequence))
         return sequences
+
+class RNN_TANH_Dataset(Dataset): 
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, A=None, B=None, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        self.num_samples = num_samples
+        self.seq_len = seq_len
+        self.vector_dim = vector_dim
+
+        #TODO: generate the dataset 
+        #load the dataset
+        self.data = torch.load('hidden_states/RNN_TANH_data.pt')['cot_data']
+        print('data size: ', self.data.size())
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return {
+            "inputs": self.data[idx],  # Input sequence
+            "labels": self.data[idx]  # Same as inputs for next-step prediction
+        }   
+    
+    def generate_sequence(self): 
+        
+

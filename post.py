@@ -99,7 +99,7 @@ if __name__ == '__main__':
     new_model.eval()
 
         # Parameters for dataset generation
-    num_batches = 100  # Number of batches to generate
+    num_batches = 10**4  # Number of batches to generate
     batch_size = 32
     seq_len = 10
     input_dim = ninp
