@@ -161,6 +161,37 @@ if __name__ == '__main__':
         torch.save(c_data, 'hidden_states/c_data.pt')  
         return 
 
+    def collect_hidden_states_RNN(data_source): 
+        # Turn on evaluation mode which disables dropout.
+        model.eval()
+        ntokens = len(corpus.dictionary)
+        hidden = model.init_hidden(eval_batch_size)
+        print('hidden: ', hidden) 
+        h_data = []
+        with torch.no_grad():
+            for i in range(0, data_source.size(0) - 1, args.bptt):
+                data, targets = get_batch(data_source, i, args=args)
+                if data.size(0) != args.bptt:
+                    print('skip data size: ', data.size())
+                    continue
+                h_list = []
+                for t in range(data.size(0)): 
+                    curr_timestep = data[t:t+1]
+                    output, hidden = model(curr_timestep, hidden)
+                    hidden = repackage_hidden(hidden)
+                    # Save hidden states for this timestep
+                    #h = hidden
+                    h_list.append(hidden.unsqueeze(0))  # shape => (1, num_layers, batch_size, hidden_size)
+                # Concatenate along the first dimension (time)
+                h_all = torch.cat(h_list, dim=0)   # (seq_len, num_layers, batch_size, hidden_size)
+                print("h_all shape:", h_all.shape)  # (seq_len, num_layers, batch_size, hidden_size)
+                h_data.append(h_all)
+        h_data = torch.cat(h_data,dim=2) 
+        print("h_data shape:", h_data.shape)
+        # Save hidden states to file
+        torch.save(h_data, f'hidden_states/{args.model}_h_data.pt') 
+        return 
+
 
     #when running the model, the model is saved in the saved_models folder
     # Load the best saved model.
