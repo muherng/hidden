@@ -205,6 +205,7 @@ if __name__ == "__main__":
         dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
     if args.data == 'LDS':
         dataset = LinearDynamicsDataset(num_samples=100000, seq_len=50, vector_dim=input_dim, seed=42)
+    
     #train_size = int(0.8 * len(dataset))
     #eval_size = len(dataset) - train_size
     #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
