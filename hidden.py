@@ -1,5 +1,5 @@
 # coding: utf-8
-import argparse
+import argparse        
 import time
 import math
 import os
@@ -119,7 +119,7 @@ if __name__ == '__main__':
                 total_loss += len(data) * criterion(output, targets).item()
         return total_loss / (len(data_source) - 1)
 
-    def collect_hidden_states(data_source): 
+    def collect_hidden_states_LSTM(data_source): 
         # Turn on evaluation mode which disables dropout.
         model.eval()
         ntokens = len(corpus.dictionary)
@@ -182,7 +182,10 @@ if __name__ == '__main__':
     #print('=' * 89)
 
     #collect hidden states
-    collect_hidden_states(test_data)
+    if args.model == 'LSTM':
+        collect_hidden_states_LSTM(test_data)
+    if args.model == 'RNN_TANH' or args.model == 'RNN_RELU':
+        collect_hidden_states_RNN(test_data)
 
     if len(args.onnx_export) > 0:
         # Export the model in ONNX format.
