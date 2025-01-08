@@ -286,10 +286,12 @@ class RNN_TANH_Dataset(Dataset):
 
             def forward(self, input_tensor, hidden):
                 outputs = []
+                all_hidden_states = []
                 for t in range(input_tensor.size(0)):
                     hidden = torch.tanh(input_tensor[t] @ self.W_ih.T + self.b_ih + hidden @ self.W_hh.T + self.b_hh)
                     outputs.append(hidden.unsqueeze(0))
-                return torch.cat(outputs, dim=0), hidden
+                    all_hidden_states.append(hidden.unsqueeze(0))
+                return torch.cat(outputs, dim=0), hidden, torch.cat(all_hidden_states, dim=0)
 
         # Example usage
         input_tensor = torch.randn(seq_len, batch_size, input_dim).to('cuda' if torch.cuda.is_available() else 'cpu')
@@ -307,12 +309,78 @@ class RNN_TANH_Dataset(Dataset):
         # Compare the results
         output_equal = torch.allclose(original_output, custom_output, atol=1e-6)
         hidden_equal = torch.allclose(original_hidden, custom_hidden, atol=1e-6)
+        print('original output: ', original_output)
+        print('custom output: ', custom_output)
 
         print(f"Outputs are equivalent: {output_equal}")
         print(f"Hidden states are equivalent: {hidden_equal}")
 
-        data = collect_hidden_states_RNN(new_model, seq_len, batch_size, num_batches, input_dim)
+        data = collect_RNN(new_model, seq_len, batch_size, num_batches, input_dim)
         torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
         # Initialize lists to store inputs and hidden states
         return data['cot_data']
+
+def collect_RNN(model, seq_len, batch_size, num_batches, input_dim):
+    """
+    Collects per-time-step hidden states for an RNN in one forward pass.
+    Minimizes Python looping for better GPU utilization.
+    """
+    device = next(model.parameters()).device
+    model.eval()
+
+    cot_data_list = []
+    hidden_data_list = []
+    input_list = []
+
+    with torch.no_grad():
+        for _ in range(num_batches):
+            print("Batch: ", _)
+            # Initialize hidden state
+            hidden = model.init_hidden(batch_size)
+
+            # Create random inputs of shape (seq_len, batch_size, input_dim)
+            # Putting them on the same device as the model
+            inputs = torch.randn(seq_len, batch_size, input_dim, device=device)
+
+            # Single forward pass to get:
+            #   decoded     -> (seq_len, batch_size, ntoken), not used here
+            #   new_hidden  -> final hidden state
+            #   all_outputs -> (seq_len, batch_size, hidden_size)
+            decoded, new_hidden, all_outputs = model(inputs, hidden)
+
+            # "all_outputs[t]" is the hidden state at time t (for the last layer).
+            # Interleave hidden states and inputs in 'cot_data' shape:
+            #   (2 * seq_len, batch_size, input_dim)
+            # so that 0,2,4,... are hidden states, and 1,3,5,... are inputs
+            cot_data = torch.zeros(2 * seq_len, batch_size, input_dim, device=device)
+            for t in range(seq_len):
+                # If LSTM, 'new_hidden' is (h, c), but 'all_outputs' is for the last layer
+                cot_data[2 * t]     = all_outputs[t]
+                cot_data[2 * t + 1] = inputs[t]
+
+            # Keep the full array of hidden states in hidden_data_list
+            all_outputs = all_outputs.permute(1, 0, 2)  # (batch_size, seq_len, hidden_size)
+            cot_data = cot_data.permute(1, 0, 2)        # (batch_size, 2*seq_len, input_dim)
+            hidden_data_list.append(all_outputs)  # shape: (batch_size, seq_len, hidden_size)
+            cot_data_list.append(cot_data)        # shape: (batch_size, 2*seq_len, input_dim)
+            input_list.append(inputs)
+
+    # Concatenate along batch axis = dimension 0
+    hidden_data = torch.cat(hidden_data_list, dim=0)  # (num_batches, seq_len, batch_size, hidden_size)
+    cot_data = torch.cat(cot_data_list, dim=0)        # (num_batches, 2*seq_len, batch_size, input_dim)
+
+    # If desired, you can permute or reshape them further
+    # For example, to flatten the first two batch dimensions:
+    #   hidden_data = hidden_data.view(-1, seq_len, batch_size, hidden_size)
+    # or reorder the dimensions as needed.
+
+    print("hidden_data shape:", hidden_data.shape)
+    print("cot_data shape:", cot_data.shape)
+
+    data = {
+        'cot_data': cot_data,         # shape (num_batches, 2*seq_len, batch_size, input_dim)
+        'hidden_data': hidden_data,   # shape (num_batches, seq_len, batch_size, hidden_size)
+        'inputs': input_list
+    }
+    return data       
 
