@@ -220,167 +220,144 @@ class RNN_TANH_Dataset(Dataset):
     
     def generate_sequences(self): 
         #Load the original model
-        original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}model.pt')
-        original_model.eval()  # Set the model to evaluation mode
+        #original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}model.pt')
+
+        # Specify the device as CUDA
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # Load the original model and move it to the device
+        original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}model.pt', map_location=device)
+        original_model.to(device)
 
         # Define the new model
-        rnn_type = 'RNN_TANH'  # or 'GRU', depending on your original model
-        ntoken = original_model.decoder.out_features
-        ninp = original_model.encoder.embedding_dim  # Use the same input dimension as the embedding output
-        nhid = original_model.rnn.hidden_size
-        nlayers = original_model.rnn.num_layers
-        dropout = original_model.drop.p
-
-        new_model = RNNModelWithoutEmbedding(rnn_type, ntoken, ninp, nhid, nlayers)
-
-        # Load the weights from the original model, skipping the embedding layer
-        new_model.rnn.load_state_dict(original_model.rnn.state_dict())
-        new_model.eval()
-
-        # Parameters for dataset generation
-        batch_size = 100
-        num_batches = int(self.num_samples/batch_size)  # Number of batches to generate
+        #rnn_type = 'RNN_TANH'  # or 'GRU', depending on your original model
+        #ntoken = original_model.decoder.out_features
+        input_dim = original_model.encoder.embedding_dim  # Use the same input dimension as the embedding output
+        hidden_dim = original_model.rnn.hidden_size
+        #nlayers = original_model.rnn.num_layers
+        #dropout = original_model.drop.p
         seq_len = self.seq_len
-        input_dim = ninp
-
-        def check_rnn_equivalence(original_model, new_model, input_tensor):
-            original_model.eval()
-            new_model.eval()
-
-            device = input_tensor.device
-            original_model.to(device)
-            new_model.to(device)
-
-            with torch.no_grad():
-                # Get the hidden state from the original model
-                original_hidden = original_model.init_hidden(input_tensor.size(1))
-                original_output, original_hidden = original_model.rnn(input_tensor, original_hidden)
-
-                # Get the hidden state from the new model
-                new_hidden = new_model.init_hidden(input_tensor.size(1))
-                new_output, new_hidden = new_model.rnn(input_tensor, new_hidden)
-
-            # Check if the outputs and hidden states are the same
-            output_equal = torch.allclose(original_output, new_output, atol=1e-6)
-            hidden_equal = all(torch.allclose(oh, nh, atol=1e-6) for oh, nh in zip(original_hidden, new_hidden))
-
-            return output_equal and hidden_equal
-
-        # Example usage:
-        input_tensor = torch.randn(seq_len, batch_size, input_dim)
-        is_equivalent = check_rnn_equivalence(original_model, new_model, input_tensor)
-        print(f"RNN blocks are equivalent: {is_equivalent}")
+        num_samples = self.num_samples
+        #input_dim = ninp
         print("Original RNN state_dict:")
         for param_tensor in original_model.rnn.state_dict():
             print(param_tensor, "\t", original_model.rnn.state_dict()[param_tensor].size())
 
-        # Custom implementation of the Elman RNN with Tanh nonlinearity
         class CustomRNN:
             def __init__(self, input_dim, hidden_dim):
                 self.input_dim = input_dim
                 self.hidden_dim = hidden_dim
-                self.W_ih = original_model.rnn.weight_ih_l0
-                self.W_hh = original_model.rnn.weight_hh_l0
-                self.b_ih = original_model.rnn.bias_ih_l0
-                self.b_hh = original_model.rnn.bias_hh_l0
+                #self.W_ih = original_model.rnn.weight_ih_l0
+                #self.W_hh = original_model.rnn.weight_hh_l0
+                #self.b_ih = original_model.rnn.bias_ih_l0
+                #self.b_hh = original_model.rnn.bias_hh_l0
+                self.W_ih = torch.eye(input_dim,device=device)
+                self.W_hh = torch.eye(hidden_dim,device=device)
+                self.b_ih = torch.zeros(original_model.rnn.bias_ih_l0.shape, device=original_model.rnn.bias_ih_l0.device)
+                self.b_hh = torch.zeros(original_model.rnn.bias_hh_l0.shape, device=original_model.rnn.bias_hh_l0.device)
 
             def forward(self, input_tensor, hidden):
                 outputs = []
                 all_hidden_states = []
                 for t in range(input_tensor.size(0)):
-                    hidden = torch.tanh(input_tensor[t] @ self.W_ih.T + self.b_ih + hidden @ self.W_hh.T + self.b_hh)
+                    hidden = torch.tanh(
+                        input_tensor[t] @ self.W_ih.T + self.b_ih + 
+                        hidden @ self.W_hh.T + self.b_hh
+                    )
                     outputs.append(hidden.unsqueeze(0))
                     all_hidden_states.append(hidden.unsqueeze(0))
                 return torch.cat(outputs, dim=0), hidden, torch.cat(all_hidden_states, dim=0)
 
-        # Example usage
-        input_tensor = torch.randn(seq_len, batch_size, input_dim).to('cuda' if torch.cuda.is_available() else 'cpu')
-        original_model.to(input_tensor.device)
+            def init_hidden(self, bsz):
+                return torch.zeros(bsz, self.hidden_dim, device=device)
 
-        # Get the hidden state from the original model
-        original_hidden = original_model.init_hidden(input_tensor.size(1)).to(input_tensor.device)
-        original_output, original_hidden = original_model.rnn(input_tensor, original_hidden)
+            def to(self, device):
+                self.W_ih = self.W_ih.to(device)
+                self.W_hh = self.W_hh.to(device)
+                self.b_ih = self.b_ih.to(device)
+                self.b_hh = self.b_hh.to(device)
 
-        # Use the custom RNN implementation
-        custom_rnn = CustomRNN(input_dim, original_model.rnn.hidden_size)
-        custom_hidden = original_hidden.clone()
-        custom_output, custom_hidden = custom_rnn.forward(input_tensor, custom_hidden)
+        new_model = CustomRNN(input_dim, hidden_dim)
+        new_model.to(device)
 
-        # Compare the results
-        output_equal = torch.allclose(original_output, custom_output, atol=1e-6)
-        hidden_equal = torch.allclose(original_hidden, custom_hidden, atol=1e-6)
-        print('original output: ', original_output)
-        print('custom output: ', custom_output)
-
-        print(f"Outputs are equivalent: {output_equal}")
-        print(f"Hidden states are equivalent: {hidden_equal}")
-
-        data = collect_RNN(new_model, seq_len, batch_size, num_batches, input_dim)
+        all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, seq_len, input_dim, device=device)
+        print('all_inputs size: ', all_inputs.size())
+        print('all_hidden_states size: ', all_hidden_states.size()) 
+        data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
+        #data = collect_RNN(new_model, num_samples, seq_len, input_dim)
         torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
         # Initialize lists to store inputs and hidden states
-        return data['cot_data']
+        return data.cpu()
 
-def collect_RNN(model, seq_len, batch_size, num_batches, input_dim):
-    """
-    Collects per-time-step hidden states for an RNN in one forward pass.
-    Minimizes Python looping for better GPU utilization.
-    """
-    device = next(model.parameters()).device
-    model.eval()
 
-    cot_data_list = []
-    hidden_data_list = []
-    input_list = []
+def interweave_inputs_and_hidden_states(input_tensor, all_hidden_states):
+    """
+    Interweaves input_tensor and all_hidden_states into a tensor T of shape (num_samples, 2*seq_len, input_dim).
+    """
+    num_samples, seq_len, input_dim = input_tensor.shape
+
+    # Initialize the output tensor T with the desired shape
+    T = torch.zeros(num_samples, 2 * seq_len, input_dim, device=input_tensor.device)
+
+    # Interweave the tensors
+    for t in range(seq_len):
+        T[:, 2 * t, :] = all_hidden_states[:, t, :]
+        T[:, 2 * t + 1, :] = input_tensor[:, t, :]
+
+    return T
+
+def generate_random_inputs_and_states(custom_rnn, num_samples, seq_len, input_dim, device='cpu'):
+    """
+    Generates random inputs of shape (num_samples, seq_len, input_dim),
+    feeds them through the CustomRNN, and returns:
+      - the randomly generated input tensor
+      - the hidden states for all timesteps of shape (num_samples, seq_len, hidden_dim)
+    """
+    with torch.no_grad():
+        # Create random inputs with desired shape
+        input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
+        
+        # Permute to match the CustomRNN input format (seq_len, batch_size, input_dim)
+        input_for_rnn = input_tensor.permute(1, 0, 2).contiguous()
+        
+        # Initialize hidden state
+        hidden = custom_rnn.init_hidden(num_samples)
+        
+        # Forward pass
+        outputs, final_hidden, all_hidden_states = custom_rnn.forward(input_for_rnn, hidden)
+        
+        # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
+        all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
+    
+    # Return both the original input (num_samples, seq_len, input_dim) and the hidden states
+    return input_tensor, all_hidden_states 
+
+
+def check_rnn_equivalence(original_model, new_model, input_tensor):
+    original_model.eval()
+    new_model.eval()
+
+    device = input_tensor.device
+    original_model.to(device)
+    new_model.to(device)
 
     with torch.no_grad():
-        for _ in range(num_batches):
-            print("Batch: ", _)
-            # Initialize hidden state
-            hidden = model.init_hidden(batch_size)
+        # Get the hidden state from the original model
+        original_hidden = original_model.init_hidden(input_tensor.size(1))
+        original_output, original_hidden = original_model.rnn(input_tensor, original_hidden)
 
-            # Create random inputs of shape (seq_len, batch_size, input_dim)
-            # Putting them on the same device as the model
-            inputs = torch.randn(seq_len, batch_size, input_dim, device=device)
+        # Get the hidden state from the new model
+        new_hidden = new_model.init_hidden(input_tensor.size(1))
+        new_output, new_hidden = new_model.rnn(input_tensor, new_hidden)
 
-            # Single forward pass to get:
-            #   decoded     -> (seq_len, batch_size, ntoken), not used here
-            #   new_hidden  -> final hidden state
-            #   all_outputs -> (seq_len, batch_size, hidden_size)
-            decoded, new_hidden, all_outputs = model(inputs, hidden)
+    # Check if the outputs and hidden states are the same
+    output_equal = torch.allclose(original_output, new_output, atol=1e-6)
+    hidden_equal = all(torch.allclose(oh, nh, atol=1e-6) for oh, nh in zip(original_hidden, new_hidden))
 
-            # "all_outputs[t]" is the hidden state at time t (for the last layer).
-            # Interleave hidden states and inputs in 'cot_data' shape:
-            #   (2 * seq_len, batch_size, input_dim)
-            # so that 0,2,4,... are hidden states, and 1,3,5,... are inputs
-            cot_data = torch.zeros(2 * seq_len, batch_size, input_dim, device=device)
-            for t in range(seq_len):
-                # If LSTM, 'new_hidden' is (h, c), but 'all_outputs' is for the last layer
-                cot_data[2 * t]     = all_outputs[t]
-                cot_data[2 * t + 1] = inputs[t]
+    return output_equal and hidden_equal
 
-            # Keep the full array of hidden states in hidden_data_list
-            all_outputs = all_outputs.permute(1, 0, 2)  # (batch_size, seq_len, hidden_size)
-            cot_data = cot_data.permute(1, 0, 2)        # (batch_size, 2*seq_len, input_dim)
-            hidden_data_list.append(all_outputs)  # shape: (batch_size, seq_len, hidden_size)
-            cot_data_list.append(cot_data)        # shape: (batch_size, 2*seq_len, input_dim)
-            input_list.append(inputs)
-
-    # Concatenate along batch axis = dimension 0
-    hidden_data = torch.cat(hidden_data_list, dim=0)  # (num_batches, seq_len, batch_size, hidden_size)
-    cot_data = torch.cat(cot_data_list, dim=0)        # (num_batches, 2*seq_len, batch_size, input_dim)
-
-    # If desired, you can permute or reshape them further
-    # For example, to flatten the first two batch dimensions:
-    #   hidden_data = hidden_data.view(-1, seq_len, batch_size, hidden_size)
-    # or reorder the dimensions as needed.
-
-    print("hidden_data shape:", hidden_data.shape)
-    print("cot_data shape:", cot_data.shape)
-
-    data = {
-        'cot_data': cot_data,         # shape (num_batches, 2*seq_len, batch_size, input_dim)
-        'hidden_data': hidden_data,   # shape (num_batches, seq_len, batch_size, hidden_size)
-        'inputs': input_list
-    }
-    return data       
+# Example usage:
+#input_tensor = torch.randn(seq_len, batch_size, input_dim)
+#is_equivalent = check_rnn_equivalence(original_model, new_model, input_tensor)
+#print(f"RNN blocks are equivalent: {is_equivalent}")
 
