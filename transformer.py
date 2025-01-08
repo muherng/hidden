@@ -196,7 +196,7 @@ if __name__ == "__main__":
                     help='options are [random, rotation, LDS, RNN_TANH]')
     parser.add_argument('--input_dim', type=int, default=10,
                     help='integer input dimension')
-    parser.add_argument('--num_samples', type=int, default=1000,
+    parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
     parser.add_argument('--seq_len', type=int, default=40,
                     help='length of each sequence')
