@@ -196,9 +196,9 @@ if __name__ == "__main__":
                     help='options are [random, rotation, LDS, RNN_TANH]')
     parser.add_argument('--input_dim', type=int, default=200,
                     help='integer input dimension')
-    parser.add_argument('--num_samples', type=int, default=1000,
+    parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=10,
+    parser.add_argument('--seq_len', type=int, default=20,
                     help='length of each sequence')
 
     args = parser.parse_args()
@@ -224,9 +224,9 @@ if __name__ == "__main__":
     print('dataset: ', dataset.data[0].shape)
 
     # Train/Validation/Test split
-    train_size = int(0.7 * len(dataset))
-    valid_size = int(0.15 * len(dataset))
-    test_size = len(dataset) - train_size - valid_size
+    valid_size = min(int(0.15 * len(dataset)), 100)
+    test_size = min(int(0.15 * len(dataset)), 100)
+    train_size = len(dataset) - valid_size - test_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
 
