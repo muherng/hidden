@@ -192,7 +192,7 @@ class LinearDynamicsDataset(Dataset):
         return sequences
 
 from train import batchify, repackage_hidden, get_batch, train, export_onnx
-from post import RNNModelWithoutEmbedding, collect_hidden_states_RNN
+from new_post import RNNModelWithoutEmbedding, collect_hidden_states_RNN
 
 class RNN_TANH_Dataset(Dataset): 
     def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, A=None, B=None, seed=None):
@@ -239,7 +239,7 @@ class RNN_TANH_Dataset(Dataset):
         new_model.eval()
 
         # Parameters for dataset generation
-        batch_size = 10
+        batch_size = 100
         num_batches = int(self.num_samples/batch_size)  # Number of batches to generate
         seq_len = self.seq_len
         input_dim = ninp
