@@ -258,15 +258,37 @@ class RNN_TANH_Dataset(Dataset):
 
             def forward(self, input_tensor, hidden):
                 outputs = []
-                all_hidden_states = []
+                all_hidden_states = [hidden.unsqueeze(0)]
+                print('input_tensor size: ', input_tensor.size())
+                print('hidden size: ', hidden.size())
                 for t in range(input_tensor.size(0)):
-                    hidden = torch.tanh(
-                        input_tensor[t] @ self.W_ih.T + self.b_ih + 
-                        hidden @ self.W_hh.T + self.b_hh
-                    )
+                    #hidden = torch.tanh(
+                    #    input_tensor[t] @ self.W_ih.T + self.b_ih + 
+                    #    hidden @ self.W_hh.T + self.b_hh
+                    #)
+                    hidden = torch.tanh(input_tensor[t,:,:] + hidden)
                     outputs.append(hidden.unsqueeze(0))
                     all_hidden_states.append(hidden.unsqueeze(0))
-                return torch.cat(outputs, dim=0), hidden, torch.cat(all_hidden_states, dim=0)
+                outputs = torch.cat(outputs, dim=0)
+                all_hidden_states = torch.cat(all_hidden_states, dim=0)
+
+                #check that all_hidden_states satisfies the RNN dynamics before the permute. 
+                for a in range(input_tensor.size(1)):
+                    for t in range(input_tensor.size(0)):
+                        if a == 0 and t == 1:
+                            print("all_hidden_states t+1 at error: ", all_hidden_states[t + 1, a, :])
+                            print('input_tensor: ', input_tensor[t, a, :])
+                            print('all_hidden_states t: ', all_hidden_states[t, a, :])
+                            print("comparison: ", torch.tanh(input_tensor[t, a, :] + all_hidden_states[t,a,:]))
+                        if not torch.allclose(all_hidden_states[t + 1, a, :], torch.tanh(input_tensor[t, a, :] + all_hidden_states[t,a,:]), atol=1e-6):
+                            print(f"IN FORWARD: RNN dynamics check failed at sample {a}, timestep {t}")
+                            print('all_hidden_states t+1: ', all_hidden_states[t + 1, a, :])
+                            print('input_tensor: ', input_tensor[t, a, :])
+                            print('all_hidden_states t: ', all_hidden_states[t, a, :])
+                            print('comparison', torch.tanh(input_tensor[t, a, :] + all_hidden_states[t,a,:]))
+                            return None, None
+
+                return outputs, hidden, all_hidden_states
 
             def init_hidden(self, bsz):
                 return torch.zeros(bsz, self.hidden_dim, device=device)
@@ -280,13 +302,35 @@ class RNN_TANH_Dataset(Dataset):
         new_model = CustomRNN(input_dim, hidden_dim)
         new_model.to(device)
 
-        all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, seq_len, input_dim, device=device)
+        all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         print('all_inputs size: ', all_inputs.size())
         print('all_hidden_states size: ', all_hidden_states.size()) 
         data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         #data = collect_RNN(new_model, num_samples, seq_len, input_dim)
         torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
         # Initialize lists to store inputs and hidden states
+        def check_interweaved_data(data, A, B):
+            """
+            Checks if tanh(A*data[a,2t,b] + B*data[a,2t+1,b]) = data[a,2t+2,b] for all t in seq_len, a in num_samples, and b in input_dim.
+            """
+            num_samples, seq_len, input_dim = data.shape
+            seq_len = seq_len // 2  # Adjust seq_len to match the original sequence length
+
+            for a in range(num_samples):
+                for t in range(seq_len - 1):  # Ensure we don't go out of bounds
+                    for b in range(input_dim):
+                        lhs = torch.tanh(A * data[a, 2 * t, b] + B * data[a, 2 * t + 1, b])
+                        rhs = data[a, 2 * t + 2, b]
+                        if not torch.allclose(lhs, rhs, atol=1e-6):
+                            return False
+            return True
+
+        # Example usage:
+        # Assuming A and B are defined and data is the output of interweave_inputs_and_hidden_states
+        A = torch.eye(input_dim, device=data.device)  # Example A matrix
+        B = torch.eye(input_dim, device=data.device)  # Example B matrix
+        is_valid = check_interweaved_data(data, A, B)
+        print(f"Data satisfies the condition: {is_valid}")
         return data.cpu()
 
 
@@ -325,9 +369,29 @@ def generate_random_inputs_and_states(custom_rnn, num_samples, seq_len, input_di
         
         # Forward pass
         outputs, final_hidden, all_hidden_states = custom_rnn.forward(input_for_rnn, hidden)
+
+        #check that all_hidden_states satisfies the RNN dynamics before the permute. 
+        for a in range(num_samples):
+            for t in range(seq_len):
+                if not torch.allclose(all_hidden_states[t + 1, a, :], torch.tanh(input_for_rnn[t, a, :] + all_hidden_states[t,a,:]), atol=1e-6):
+                    print(f"BEFORE PERMUTE: RNN dynamics check failed at sample {a}, timestep {t}")
+                    print('all_hidden_states t+1: ', all_hidden_states[t + 1, a, :])
+                    print('input_tensor: ', input_for_rnn[t, a, :])
+                    print('all_hidden_states t: ', all_hidden_states[t, a, :])
+                    print('comparison', torch.tanh(input_for_rnn[t, a, :] + all_hidden_states[t,a,:]))
+                    return None, None
         
         # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
         all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
+
+        # Check that all_hidden_states satisfies the RNN dynamics
+        for a in range(num_samples):
+            for t in range(seq_len - 1):
+                if not torch.allclose(all_hidden_states[a, t + 1, :], torch.tanh(input_tensor[a, t, :] + all_hidden_states[a, t, :]), atol=1e-6):
+                    print(f"RNN dynamics check failed at sample {a}, timestep {t}")
+                    return None, None
+
+        #check that all_hidden_states satisfies the RNN dynamics.  
     
     # Return both the original input (num_samples, seq_len, input_dim) and the hidden states
     return input_tensor, all_hidden_states 
