@@ -237,7 +237,7 @@ if __name__ == '__main__':
             print('-' * 89)
             # Save the model if the validation loss is the best we've seen so far.
             if not best_val_loss or val_loss < best_val_loss:
-                file = 'saved_models/' + args.model + '/' + args.save
+                file = 'saved_models/' + args.model + f'/{args.emsize}' + args.save
                 print(f'saving to {file}')
                 with open(file, 'wb') as f:
                     torch.save(model, f)

@@ -198,7 +198,7 @@ if __name__ == "__main__":
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=20,
+    parser.add_argument('--seq_len', type=int, default=2,
                     help='length of each sequence')
 
     args = parser.parse_args()
