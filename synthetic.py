@@ -220,24 +220,18 @@ class RNN_TANH_Dataset(Dataset):
             "labels": self.data[idx]  # Same as inputs for next-step prediction
         }   
     
-    def generate_sequences(self): 
-        #Load the original model
-        #original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}model.pt')
-
+    def generate_sequences(self):   
         # Specify the device as CUDA
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # Load the original model and move it to the device
-        original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}model.pt', map_location=device)
+        original_model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}_model.pt', map_location=device)
         original_model.to(device)
 
         # Define the new model
-        #rnn_type = 'RNN_TANH'  # or 'GRU', depending on your original model
-        #ntoken = original_model.decoder.out_features
         input_dim = original_model.encoder.embedding_dim  # Use the same input dimension as the embedding output
         hidden_dim = original_model.rnn.hidden_size
         #nlayers = original_model.rnn.num_layers
-        #dropout = original_model.drop.p
         seq_len = self.seq_len
         num_samples = self.num_samples
         #input_dim = ninp
@@ -246,7 +240,7 @@ class RNN_TANH_Dataset(Dataset):
             print(param_tensor, "\t", original_model.rnn.state_dict()[param_tensor].size())
 
         class CustomRNN:
-            def __init__(self, input_dim, hidden_dim):
+            def __init__(self, input_dim, hidden_dim, original_model):
                 self.input_dim = input_dim
                 self.hidden_dim = hidden_dim
                 self.W_ih = original_model.rnn.weight_ih_l0
@@ -261,14 +255,11 @@ class RNN_TANH_Dataset(Dataset):
             def forward(self, input_tensor, hidden):
                 outputs = []
                 all_hidden_states = [hidden.unsqueeze(0)]
-                print('input_tensor size: ', input_tensor.size())
-                print('hidden size: ', hidden.size())
                 for t in range(input_tensor.size(0)):
                     hidden = torch.tanh(
                         input_tensor[t] @ self.W_ih.T + self.b_ih + 
                         hidden @ self.W_hh.T + self.b_hh
                     )
-                    #hidden = torch.tanh(input_tensor[t,:,:] + hidden)
                     outputs.append(hidden.unsqueeze(0))
                     all_hidden_states.append(hidden.unsqueeze(0))
                 outputs = torch.cat(outputs, dim=0)
@@ -278,11 +269,6 @@ class RNN_TANH_Dataset(Dataset):
                 if debug == True: 
                     for a in range(input_tensor.size(1)):
                         for t in range(input_tensor.size(0)):
-                            if a == 0 and t == 1:
-                                print("all_hidden_states t+1 at error: ", all_hidden_states[t + 1, a, :])
-                                print('input_tensor: ', input_tensor[t, a, :])
-                                print('all_hidden_states t: ', all_hidden_states[t, a, :])
-                                print("comparison: ", torch.tanh(input_tensor[t, a, :] + all_hidden_states[t,a,:]))
                             if not torch.allclose(all_hidden_states[t + 1, a, :], torch.tanh(input_tensor[t, a, :] + all_hidden_states[t,a,:]), atol=1e-6):
                                 print(f"IN FORWARD: RNN dynamics check failed at sample {a}, timestep {t}")
                                 print('all_hidden_states t+1: ', all_hidden_states[t + 1, a, :])
@@ -302,14 +288,11 @@ class RNN_TANH_Dataset(Dataset):
                 self.b_ih = self.b_ih.to(device)
                 self.b_hh = self.b_hh.to(device)
 
-        new_model = CustomRNN(input_dim, hidden_dim)
+        new_model = CustomRNN(input_dim, hidden_dim, original_model)
         new_model.to(device)
 
         all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
-        print('all_inputs size: ', all_inputs.size())
-        print('all_hidden_states size: ', all_hidden_states.size()) 
         data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
-        #data = collect_RNN(new_model, num_samples, seq_len, input_dim)
         torch.save(data, f'hidden_states/RNN_TANH_data.pt') 
         # Initialize lists to store inputs and hidden states
         def check_interweaved_data(data, A, B):
@@ -425,9 +408,4 @@ def check_rnn_equivalence(original_model, new_model, input_tensor):
     hidden_equal = all(torch.allclose(oh, nh, atol=1e-6) for oh, nh in zip(original_hidden, new_hidden))
 
     return output_equal and hidden_equal
-
-# Example usage:
-#input_tensor = torch.randn(seq_len, batch_size, input_dim)
-#is_equivalent = check_rnn_equivalence(original_model, new_model, input_tensor)
-#print(f"RNN blocks are equivalent: {is_equivalent}")
 
