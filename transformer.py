@@ -47,7 +47,7 @@ class VectorGPTConfig(GPT2Config):
 class VectorGPTModel(PreTrainedModel):
     """
     A GPT2-like model that:
-      - Maps 200-d input vectors -> hidden_dim
+      - Maps input_dim input vectors -> hidden_dim
       - Applies GPT2 blocks (decoder-only, causal)
       - Projects back to 200-d for next-step prediction
     """
@@ -121,7 +121,8 @@ class VectorGPTTrainer(Trainer):
         
         if labels is not None:
             # Create a mask for every other token, the size of the mask is seq_len - 1 because we are predicting the next token
-            mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len,)
+            # TODO: adjust the mask for deep networks
+            mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len - 1,)
             mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
             #print('mask: ', mask)
             
@@ -134,9 +135,6 @@ class VectorGPTTrainer(Trainer):
 
             huber_fn = nn.HuberLoss()
             loss = huber_fn(pred, tgt)
-
-            #mse_fn = nn.MSELoss()
-            #loss = mse_fn(pred, tgt)
         else:
             loss = None
 
@@ -200,28 +198,26 @@ if __name__ == "__main__":
                     help='number of sequences each of seq_len')
     parser.add_argument('--seq_len', type=int, default=4,
                     help='length of each sequence')
-
+    
     args = parser.parse_args()
+    print('args: ', args)
     input_dim = args.input_dim
     num_samples = args.num_samples
     seq_len = args.seq_len
-    print('args: ', args)
+
     if args.data == 'random': 
-        dataset = RandomVectorDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
+        dataset = RandomVectorDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data =='rotation':
-        dataset = FixedRotationDataset(num_samples=10000, seq_len=30, vector_dim=200, seed=42)
+        dataset = FixedRotationDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'LDS':
-        dataset = LinearDynamicsDataset(A=torch.eye(input_dim), B=torch.eye(input_dim), num_samples=1000, seq_len=50, vector_dim=input_dim, seed=42)
+        dataset = LinearDynamicsDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN_TANH': 
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
-    
-    #train_size = int(0.8 * len(dataset))
-    #eval_size = len(dataset) - train_size
-    #train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+
     
     #TODO: RNN dataset is wrong order (seq_len, batch_size, input_dim) instead of (batch_size, seq_len, input_dim)
-    print('len dataset: ', len(dataset.data))
-    print('dataset: ', dataset.data[0].shape)
+    print('number of samples in dataset: ', len(dataset.data))
+    print('datapoint shape: ', dataset.data[0].shape)
 
     # Train/Validation/Test split
     valid_size = min(int(0.15 * len(dataset)), 100)
