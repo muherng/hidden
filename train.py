@@ -224,7 +224,7 @@ if __name__ == '__main__':
     best_val_loss = None
 
     # At any point you can hit Ctrl + C to break out of training early.
-    file = 'saved_models/' + args.model + '/' + args.save
+    file = 'saved_models/' + args.model + f'/{args.emsize}' + args.save
     try:
         for epoch in range(1, args.epochs+1):
             epoch_start_time = time.time()
@@ -237,7 +237,6 @@ if __name__ == '__main__':
             print('-' * 89)
             # Save the model if the validation loss is the best we've seen so far.
             if not best_val_loss or val_loss < best_val_loss:
-                file = 'saved_models/' + args.model + f'/{args.emsize}' + args.save
                 print(f'saving to {file}')
                 with open(file, 'wb') as f:
                     torch.save(model, f)
