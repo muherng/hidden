@@ -242,6 +242,8 @@ if __name__ == "__main__":
     # 3. Training arguments
     training_args = TrainingArguments(
         output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
+        save_prefix=f"{args.data}_{args.input_dim}_{args.num_samples}_{args.seq_len}",
+        save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=True,         # Overwrite existing output dir
         eval_strategy="epoch",             # Evaluate at the end of each epoch
         save_strategy="epoch",             # Save checkpoints every epoch
@@ -284,3 +286,32 @@ if __name__ == "__main__":
     # Evaluate on test dataset
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
+
+"""     # 3. Training arguments for Vision Transformer
+    training_args = TrainingArguments(
+        output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
+        save_steps=1000,                    # Save checkpoint every 500 steps
+        overwrite_output_dir=True,         # Overwrite existing output dir
+        eval_strategy="epoch",             # Evaluate at the end of each epoch
+        save_strategy="epoch",             # Save checkpoints every epoch
+        logging_dir="./logs",              # Directory for TensorBoard logs
+        logging_steps=10,                  # Log every 10 steps for finer feedback
+        save_total_limit=5,                # Keep only the last 3 checkpoints
+        load_best_model_at_end=True,       # Load the best model based on validation loss
+        metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
+        greater_is_better=False,           # Lower loss is better
+        learning_rate=5e-5,                # Lower learning rate for stability
+        weight_decay=0.01,                 # Weight decay for regularization
+        adam_beta1=0.9,                    # First momentum parameter
+        adam_beta2=0.999,                   # Second momentum parameter
+        adam_epsilon=1e-8,                 # Epsilon for numerical stability
+        warmup_steps=500,                  # Reduced warmup steps
+        per_device_train_batch_size=32,    # Batch size per GPU during training
+        per_device_eval_batch_size=32,     # Batch size per GPU during evaluation
+        gradient_accumulation_steps=2,     # Accumulate gradients over 1 step
+        fp16=True,                         # Use mixed precision (FP16)
+        max_grad_norm=1.0,                 # Gradient clipping
+        num_train_epochs=1,                # Fewer epochs to prevent overfitting
+        report_to="tensorboard",           # Log to TensorBoard
+        seed=42,                           # Set seed for reproducibility
+    ) """
