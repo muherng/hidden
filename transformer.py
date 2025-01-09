@@ -198,7 +198,7 @@ if __name__ == "__main__":
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=40,
+    parser.add_argument('--seq_len', type=int, default=4,
                     help='length of each sequence')
 
     args = parser.parse_args()
@@ -236,9 +236,9 @@ if __name__ == "__main__":
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
         n_positions=64,  # must be >= 30 (seq_len)
-        n_embd=256,      # hidden dimension
-        n_layer=6,       # transformer layers
-        n_head=8,        # attention heads
+        n_embd=768,      # hidden dimension
+        n_layer=12,       # transformer layers
+        n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
     )
     model = VectorGPTModel(config)
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=1,     # Accumulate gradients over 1 step
         fp16=True,                         # Use mixed precision (FP16)
         max_grad_norm=1.0,                 # Gradient clipping
-        num_train_epochs=5,                # Fewer epochs to prevent overfitting
+        num_train_epochs=1,                # Fewer epochs to prevent overfitting
         report_to="tensorboard",           # Log to TensorBoard
         seed=42,                           # Set seed for reproducibility
     )
