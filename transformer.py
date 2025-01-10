@@ -242,7 +242,6 @@ if __name__ == "__main__":
     # 3. Training arguments
     training_args = TrainingArguments(
         output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
-        save_prefix=f"{args.data}_{args.input_dim}_{args.num_samples}_{args.seq_len}",
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=True,         # Overwrite existing output dir
         eval_strategy="epoch",             # Evaluate at the end of each epoch
