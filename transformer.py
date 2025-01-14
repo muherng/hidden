@@ -238,7 +238,7 @@ if __name__ == "__main__":
         input_dim=input_dim,  # input vector dimension
     )
     model = VectorGPTModel(config)
-
+ 
     # 3. Training arguments
     training_args = TrainingArguments(
         output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
