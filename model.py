@@ -250,5 +250,11 @@ if __name__ == '__main__':
     print('data shape: ', data.shape)
     print('mask: ', mask)
 
+    f = 'saved_models/model.pth'
+    torch.save(model, f)
+    model = torch.load(f, weights_only=False)
+    model.eval()
+    outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+    print('saved then output mask: ', mask)
 
 
