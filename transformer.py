@@ -12,7 +12,7 @@ from transformers.optimization import AdamW, get_scheduler
 from sklearn.model_selection import train_test_split
 
 #synthetic dataset imports
-from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset
+from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset, RNN_Dataset
 import argparse
 
 # Check if CUDA is available
@@ -198,12 +198,15 @@ if __name__ == "__main__":
                     help='number of sequences each of seq_len')
     parser.add_argument('--seq_len', type=int, default=4,
                     help='length of each sequence')
+    parser.add_argument('--num_layers', type=int, default=1,
+                    help='number of layers in data generating model')
     
     args = parser.parse_args()
     print('args: ', args)
     input_dim = args.input_dim
     num_samples = args.num_samples
     seq_len = args.seq_len
+    num_layers = args.num_layers
 
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
@@ -213,11 +216,14 @@ if __name__ == "__main__":
         dataset = LinearDynamicsDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN_TANH': 
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
+    if args.data == 'RNN': 
+        dataset = RNN_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, num_layers=num_layers, seed=42)
 
     
     #TODO: RNN dataset is wrong order (seq_len, batch_size, input_dim) instead of (batch_size, seq_len, input_dim)
     print('number of samples in dataset: ', len(dataset.data))
     print('datapoint shape: ', dataset.data[0].shape)
+    print('mask: ', dataset.mask)
 
     # Train/Validation/Test split
     valid_size = min(int(0.15 * len(dataset)), 100)
