@@ -364,3 +364,53 @@ def check_rnn_equivalence(original_model, new_model, input_tensor):
 
     return output_equal and hidden_equal
 
+
+class RNN_Dataset(Dataset): 
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, nlayers = 1, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        self.num_samples = num_samples
+        self.seq_len = seq_len
+        self.vector_dim = vector_dim
+        self.nlayers = nlayers
+
+        #TODO: generate the dataset 
+        #load the dataset
+        self.data = self.generate_sequences()
+        print('data size: ', self.data.size())
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return {
+            "inputs": self.data[idx],  # Input sequence
+            "labels": self.data[idx]  # Same as inputs for next-step prediction
+        }   
+    
+    def generate_sequences(self):   
+        # Specify the device as CUDA
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # Load the original model and move it to the device
+        model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}_{self.nlayers}model.pt', map_location=device)
+        model.to(device)
+
+        # Define the new model
+        input_dim = model.encoder.embedding_dim  # Use the same input dimension as the embedding output
+        hidden_dim = model.rnn.hidden_size
+        nlayers = model.rnn.num_layers
+        seq_len = self.seq_len
+        num_samples = self.num_samples
+        #input_dim = ninp
+        print("Original RNN state_dict:")
+        for param_tensor in model.rnn.state_dict():
+            print(param_tensor, "\t", model.rnn.state_dict()[param_tensor].size())
+
+        #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
+        #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
+        model.collect_hidden_states_RNN()
+        torch.save(data, f'hidden_states/RNN_TANH_{input_dim}_data.pt') 
+        return data.cpu()
+
