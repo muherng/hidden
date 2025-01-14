@@ -60,6 +60,42 @@ class RNNModel(nn.Module):
                     weight.new_zeros(self.nlayers, bsz, self.nhid))
         else:
             return weight.new_zeros(self.nlayers, bsz, self.nhid)
+    
+    def collect_hidden_states_RNN(self,input,hidden): 
+        # input: (seq_len, batch_size, input_dim)
+        # Collect hidden states from all layers of RNN
+        # This is useful for tasks like language modeling where we need to pass hidden states
+        # from all layers to the decoder.
+        #for now assume input_dim and hidden_dim are equal
+        #TODO: handle different input and hidden dimensions
+        data = []
+        outputs = []
+        all_hidden_states = [hidden.unsqueeze(0)]
+        mask = []
+        for t in range(input_tensor.size(0)):
+            out,hidden = self.rnn(input[t].unsqueeze(0),hidden) 
+            #out shape: (1, batch_size, input_dim) because sequence length is 1
+            #hidden shape: (nlayers, batch_size, hidden_dim) 
+            outputs.append(out.unsqueeze(0))
+            all_hidden_states.append(hidden.unsqueeze(0))
+            #although out[0].unsqueeze(0) does nothing, 
+            #it is done to maintain notion of sequence length (dropped) 
+            #then we add a dimension representing the sequence length
+            #this maintains consistency with how we handle hidden_dim. 
+            for layer in range(self.nlayers): 
+                data.append(hidden[layer,:,:].unsqueeze(0))
+            data.append(out[0].unsqueeze(0))
+            #mask is incremented by number of layers + number of input vectors per timestep
+            if t == 0: 
+                mask.extend([0]*(self.nlayers + 1))
+            if t > 0: 
+                mask.extend([1]*self.nlayers + [0])
+        outputs = torch.cat(outputs, dim=0)
+        all_hidden_states = torch.cat(all_hidden_states, dim=0)
+        data = torch.cat(data, dim=0)
+        #mask is applied only to every token after the first 
+        mask = torch.tensor(mask[1:])
+        return outputs, all_hidden_states, data, mask
 
 # Temporarily leave PositionalEncoding module here. Will be moved somewhere else.
 class PositionalEncoding(nn.Module):
@@ -142,3 +178,77 @@ class TransformerModel(nn.Transformer):
         output = self.encoder(src, mask=self.src_mask)
         output = self.decoder(output)
         return F.log_softmax(output, dim=-1)
+
+
+class MultiLayerElmanRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super(MultiLayerElmanRNN, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        
+        # Create a list of RNNCells for each layer
+        self.rnn_cells = nn.ModuleList([
+            nn.RNNCell(input_size if layer_idx == 0 else hidden_size,
+                       hidden_size)
+            for layer_idx in range(num_layers)
+        ])
+    
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor of shape (seq_len, batch, input_size)
+        
+        Returns:
+            all_states: list of length seq_len, 
+                        where each element is a list of length num_layers 
+                        containing the hidden states for each layer at that timestep.
+        """
+        seq_len, batch_size, _ = x.size()
+
+        # Initialize hidden states for each layer: list of tensors
+        h = [torch.zeros(batch_size, self.hidden_size, device=x.device)
+             for _ in range(self.num_layers)]
+
+        # To store hidden states at each timestep
+        all_states = []
+
+        # Manually unroll over time
+        for t in range(seq_len):
+            # Get input at time step t
+            current_input = x[t]
+            # Pass through each layer sequentially
+            for layer_idx, cell in enumerate(self.rnn_cells):
+                # Compute next hidden state for layer 'layer_idx'
+                h[layer_idx] = cell(current_input, h[layer_idx])
+                # The output of current layer becomes input to next layer
+                current_input = h[layer_idx]
+            # Store a copy of all layer hidden states at this timestep
+            all_states.append([layer_state.clone() for layer_state in h])
+
+        return all_states
+
+if __name__ == '__main__': 
+    # number of tokens, dim input, dim hidden, number of layers, dropout
+    seq_len = 9
+    batch_size = 32
+    input_dim = 10
+    hidden_dim = 10
+    num_layers = 2
+    num_tokens = 100
+    
+    model = RNNModel('RNN_TANH', num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
+    model.init_weights()
+    model.eval()
+
+    #input is of dimension (seq_len, batch, input_dim)
+    input_tensor = torch.randn(seq_len, batch_size, input_dim)
+    outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+
+    #print("all_hidden_states shape: ", all_hidden_states.shape)
+    #print('all_hidden_states: ', all_hidden_states)
+    print('data: ', data)
+    print('data shape: ', data.shape)
+    print('mask: ', mask)
+
+
+
