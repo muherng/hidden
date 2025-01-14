@@ -366,18 +366,18 @@ def check_rnn_equivalence(original_model, new_model, input_tensor):
 
 
 class RNN_Dataset(Dataset): 
-    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, nlayers = 1, seed=None):
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, num_layers = 1, seed=None):
         if seed is not None:
             torch.manual_seed(seed)
 
         self.num_samples = num_samples
         self.seq_len = seq_len
         self.vector_dim = vector_dim
-        self.nlayers = nlayers
+        self.num_layers = num_layers
 
         #TODO: generate the dataset 
         #load the dataset
-        self.data = self.generate_sequences()
+        self.data, self.mask = self.generate_sequences()
         print('data size: ', self.data.size())
 
     def __len__(self):
@@ -394,7 +394,7 @@ class RNN_Dataset(Dataset):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # Load the original model and move it to the device
-        model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}_{self.nlayers}model.pt', map_location=device)
+        model = torch.load(f'saved_models/RNN_TANH/{self.vector_dim}_{self.num_layers}model.pt', map_location=device)
         model.to(device)
 
         # Define the new model
@@ -410,7 +410,20 @@ class RNN_Dataset(Dataset):
 
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
-        model.collect_hidden_states_RNN()
-        torch.save(data, f'hidden_states/RNN_TANH_{input_dim}_data.pt') 
-        return data.cpu()
+        
+        with torch.no_grad():
+            # Create random inputs with desired shape
+            input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
+            
+            # Permute to match the torch RNN input format (seq_len, batch_size, input_dim)
+            input_rnn = input_tensor.permute(1, 0, 2).contiguous()
+
+            outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_rnn, model.init_hidden(num_samples))
+            data = data.permute(1, 0, 2).contiguous()
+            
+            # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
+            #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
+        
+        #torch.save(data, f'hidden_states/RNN_TANH_{input_dim}_data.pt') 
+        return data.cpu(), mask.cpu()   
 

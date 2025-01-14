@@ -61,7 +61,7 @@ class RNNModel(nn.Module):
         else:
             return weight.new_zeros(self.nlayers, bsz, self.nhid)
     
-    def collect_hidden_states_RNN(self,input,hidden): 
+    def collect_hidden_states_RNN(self,input_tensor,hidden): 
         # input: (seq_len, batch_size, input_dim)
         # Collect hidden states from all layers of RNN
         # This is useful for tasks like language modeling where we need to pass hidden states
@@ -73,7 +73,7 @@ class RNNModel(nn.Module):
         all_hidden_states = [hidden.unsqueeze(0)]
         mask = []
         for t in range(input_tensor.size(0)):
-            out,hidden = self.rnn(input[t].unsqueeze(0),hidden) 
+            out,hidden = self.rnn(input_tensor[t].unsqueeze(0),hidden) 
             #out shape: (1, batch_size, input_dim) because sequence length is 1
             #hidden shape: (nlayers, batch_size, hidden_dim) 
             outputs.append(out.unsqueeze(0))
@@ -95,6 +95,10 @@ class RNNModel(nn.Module):
         data = torch.cat(data, dim=0)
         #mask is applied only to every token after the first 
         mask = torch.tensor(mask[1:])
+        #shape of outputs: (seq_len, batch_size, input_dim)
+        #shape of all_hidden_states: (seq_len, nlayers, batch_size, hidden_dim)
+        #shape of data: (seq_len*nlayers + seq_len, batch_size, hidden_dim)
+        #shape of mask: seq_len*nlayers + seq_len - 1
         return outputs, all_hidden_states, data, mask
 
 # Temporarily leave PositionalEncoding module here. Will be moved somewhere else.
@@ -255,6 +259,8 @@ if __name__ == '__main__':
     model = torch.load(f, weights_only=False)
     model.eval()
     outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+    
+    print('data shape: ', data.shape)
     print('saved then output mask: ', mask)
 
 
