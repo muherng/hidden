@@ -202,8 +202,8 @@ if __name__ == "__main__":
     # 1. Synthetic dataset
     #parse args
     parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
-    parser.add_argument('--data', type=str, default='random',
-                    help='options are [random, rotation, LDS, RNN_TANH]')
+    parser.add_argument('--data', type=str, default='RNN',
+                    help='options are [random, rotation, LDS, RNN_TANH, RNN]')
     parser.add_argument('--input_dim', type=int, default=10,
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
@@ -227,6 +227,7 @@ if __name__ == "__main__":
     if args.data == 'LDS':
         dataset = LinearDynamicsDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN_TANH': 
+        print('RNN_TANH is now defunct')
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN': 
         dataset = RNN_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, num_layers=num_layers, seed=42)
@@ -297,6 +298,28 @@ if __name__ == "__main__":
         mask=dataset.mask #mask out input tokens to predict hidden state
     )
 
+    import json
+    from transformers import TrainerCallback
+
+    class SaveLossCallback(TrainerCallback):
+        def __init__(self, output_file="losses.json"):
+            self.output_file = output_file
+            self.losses = {"training_loss": [], "validation_loss": []}
+        
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs is not None:
+                if "loss" in logs:  # Training loss
+                    self.losses["training_loss"].append(logs["loss"])
+                if "eval_loss" in logs:  # Validation loss
+                    self.losses["validation_loss"].append(logs["eval_loss"])
+            
+            # Save to file after every logging step
+            with open(self.output_file, "w") as f:
+                json.dump(self.losses, f, indent=4)
+
+    # Add the callback to the Trainer
+    trainer.add_callback(SaveLossCallback("./results/losses.json"))
+
     # 5. Start training
     trainer.train()
 
@@ -305,31 +328,28 @@ if __name__ == "__main__":
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
 
-"""     # 3. Training arguments for Vision Transformer
-    training_args = TrainingArguments(
-        output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
-        save_steps=1000,                    # Save checkpoint every 500 steps
-        overwrite_output_dir=True,         # Overwrite existing output dir
-        eval_strategy="epoch",             # Evaluate at the end of each epoch
-        save_strategy="epoch",             # Save checkpoints every epoch
-        logging_dir="./logs",              # Directory for TensorBoard logs
-        logging_steps=10,                  # Log every 10 steps for finer feedback
-        save_total_limit=5,                # Keep only the last 3 checkpoints
-        load_best_model_at_end=True,       # Load the best model based on validation loss
-        metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
-        greater_is_better=False,           # Lower loss is better
-        learning_rate=5e-5,                # Lower learning rate for stability
-        weight_decay=0.01,                 # Weight decay for regularization
-        adam_beta1=0.9,                    # First momentum parameter
-        adam_beta2=0.999,                   # Second momentum parameter
-        adam_epsilon=1e-8,                 # Epsilon for numerical stability
-        warmup_steps=500,                  # Reduced warmup steps
-        per_device_train_batch_size=32,    # Batch size per GPU during training
-        per_device_eval_batch_size=32,     # Batch size per GPU during evaluation
-        gradient_accumulation_steps=2,     # Accumulate gradients over 1 step
-        fp16=True,                         # Use mixed precision (FP16)
-        max_grad_norm=1.0,                 # Gradient clipping
-        num_train_epochs=1,                # Fewer epochs to prevent overfitting
-        report_to="tensorboard",           # Log to TensorBoard
-        seed=42,                           # Set seed for reproducibility
-    ) """
+    import matplotlib.pyplot as plt
+
+    # Load the JSON file
+    with open("./results/losses.json", "r") as f:
+        losses = json.load(f)
+
+    # Extract training and validation losses
+    training_loss = losses.get("training_loss", [])
+    validation_loss = losses.get("validation_loss", [])
+
+    # Plot the losses
+    plt.figure(figsize=(10, 6))
+    plt.plot(training_loss, label="Training Loss", marker="o")
+    if validation_loss:  # Only plot if validation loss exists
+        plt.plot(validation_loss, label="Validation Loss", marker="x")
+        
+    # Add labels and title
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.title("Training and Validation Loss Over Epochs")
+    plt.legend()
+    plt.grid(True)
+
+    plt.savefig('./plots/loss_plot.png')
+
