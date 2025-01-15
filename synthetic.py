@@ -386,7 +386,8 @@ class RNN_Dataset(Dataset):
     def __getitem__(self, idx):
         return {
             "inputs": self.data[idx],  # Input sequence
-            "labels": self.data[idx]  # Same as inputs for next-step prediction
+            "labels": self.data[idx],  # Same as inputs for next-step prediction
+            "mask": self.mask
         }   
     
     def generate_sequences(self):   

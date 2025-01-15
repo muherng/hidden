@@ -109,12 +109,18 @@ class VectorGPTModel(PreTrainedModel):
 # 1. Custom Trainer Class
 # ----------------------------------------------------
 class VectorGPTTrainer(Trainer):
+    
+    def __init__(self, *args, mask=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mask = mask
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
         """
         labels = inputs.pop("labels", None)
         outputs = model(**inputs)  # Forward pass without labels
+        mask = self.mask
         
         # Extract the logits
         logits = outputs.logits  # (bsz, seq_len, vocab_size)
@@ -122,9 +128,15 @@ class VectorGPTTrainer(Trainer):
         if labels is not None:
             # Create a mask for every other token, the size of the mask is seq_len - 1 because we are predicting the next token
             # TODO: adjust the mask for deep networks
-            mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len - 1,)
+            #default mask is every other token 
+            if mask is None: 
+                print('warning: no mask provided, using default mask')
+                mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len - 1,)
+            #ensure mask is of the right length for the labels shifted by one
+            mask = mask[:labels.size(1)-1]
             mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
-            #print('mask: ', mask)
+            #print('mask size: ', mask.size())
+            #print('mask:', mask)
             
             # Apply the mask to predictions and labels
             pred = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
@@ -196,7 +208,7 @@ if __name__ == "__main__":
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=4,
+    parser.add_argument('--seq_len', type=int, default=2,
                     help='length of each sequence')
     parser.add_argument('--num_layers', type=int, default=1,
                     help='number of layers in data generating model')
@@ -282,6 +294,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         tokenizer=None,  # Not needed for vector-based tasks
+        mask=dataset.mask #mask out input tokens to predict hidden state
     )
 
     # 5. Start training
