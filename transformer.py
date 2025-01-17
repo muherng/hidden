@@ -263,8 +263,9 @@ if __name__ == "__main__":
         output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=True,         # Overwrite existing output dir
-        eval_strategy="epoch",             # Evaluate at the end of each epoch
-        save_strategy="epoch",             # Save checkpoints every epoch
+        eval_strategy="steps",             # Evaluate at the end of each epoch
+        eval_steps=10,                    # Evaluate every 100 steps
+        save_strategy="steps",             # Save checkpoints every epoch
         logging_dir="./logs",              # Directory for TensorBoard logs
         logging_steps=10,                  # Log every 10 steps for finer feedback
         save_total_limit=3,                # Keep only the last 3 checkpoints
@@ -318,7 +319,7 @@ if __name__ == "__main__":
                 json.dump(self.losses, f, indent=4)
 
     # Add the callback to the Trainer
-    trainer.add_callback(SaveLossCallback("./results/losses.json"))
+    trainer.add_callback(SaveLossCallback(f"./results/{args.input_dim}_{args.num_layers}losses.json"))
 
     # 5. Start training
     trainer.train()
@@ -331,7 +332,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # Load the JSON file
-    with open("./results/losses.json", "r") as f:
+    with open(f"./results/{args.input_dim}_{args.num_layers}losses.json", "r") as f:
         losses = json.load(f)
 
     # Extract training and validation losses
@@ -345,11 +346,11 @@ if __name__ == "__main__":
         plt.plot(validation_loss, label="Validation Loss", marker="x")
         
     # Add labels and title
-    plt.xlabel("Epochs")
+    plt.xlabel("Steps")
     plt.ylabel("Loss")
-    plt.title("Training and Validation Loss Over Epochs")
+    plt.title("Training and Validation Loss MSE Over Steps=160")
     plt.legend()
     plt.grid(True)
 
-    plt.savefig('./plots/loss_plot.png')
+    plt.savefig(f'./plots/{args.input_dim}_{args.num_layers}loss_plot.png')
 
