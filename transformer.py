@@ -12,7 +12,7 @@ from transformers.optimization import AdamW, get_scheduler
 from sklearn.model_selection import train_test_split
 
 #synthetic dataset imports
-from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset, RNN_Dataset
+from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset, RNN_Dataset, LSTM_Dataset
 import argparse
 
 # Check if CUDA is available
@@ -231,6 +231,8 @@ if __name__ == "__main__":
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN': 
         dataset = RNN_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, num_layers=num_layers, seed=42)
+    if args.data == 'LSTM': 
+        dataset = LSTM_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, num_layers=num_layers, seed=42)
 
     
     #TODO: RNN dataset is wrong order (seq_len, batch_size, input_dim) instead of (batch_size, seq_len, input_dim)
