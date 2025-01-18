@@ -7,6 +7,7 @@ import json
 num_layers_range = [2,4,8,16]  # Example: Iterate over 1 to 10 layers
 script_to_run = "transformer.py"  # Replace with the actual script name
 results = []
+model = 'RNN'
 
 # Run the other script in a loop
 for num_layers in num_layers_range:
