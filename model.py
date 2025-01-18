@@ -84,7 +84,8 @@ class RNNModel(nn.Module):
             #this maintains consistency with how we handle hidden_dim. 
             for layer in range(self.nlayers): 
                 data.append(hidden[layer,:,:].unsqueeze(0))
-            data.append(out[0].unsqueeze(0))
+            #data.append(out[0].unsqueeze(0))
+            data.append(input_tensor[t].unsqueeze(0))
             #mask is incremented by number of layers + number of input vectors per timestep
             if t == 0: 
                 mask.extend([0]*(self.nlayers + 1))
@@ -100,6 +101,112 @@ class RNNModel(nn.Module):
         #shape of data: (seq_len*nlayers + seq_len, batch_size, hidden_dim)
         #shape of mask: seq_len*nlayers + seq_len - 1
         return outputs, all_hidden_states, data, mask
+
+    def collect_hidden_states_LSTM(self, input_tensor, hidden):
+        """
+        This function manually unrolls the LSTM one timestep at a time, 
+        collecting the outputs and hidden states at each step.
+        
+        Args:
+            input_tensor: (seq_len, batch_size, input_dim)
+            hidden: (h, c), each (nlayers, batch_size, hidden_dim)
+        
+        Returns:
+            outputs: stacked LSTM outputs at each time step
+            all_hidden_states: a tuple (all_h, all_c), 
+                               each (seq_len+1, nlayers, batch_size, hidden_dim)
+                               where seq_len+1 includes the initial hidden state (index 0).
+            data: a tensor collecting (for each timestep t): 
+                  [h[layer] for all layers, c[layer] for all layers, out(t)] 
+            mask: a tensor analogous to your RNN code (may be ignored if not needed)
+        """
+
+        # Unpack the initial hidden states (h0, c0)
+        h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
+
+        # We’ll collect everything in lists first.
+        outputs = []
+        data = []
+        mask = []
+
+        # We'll keep track of all hidden states (h) and cell states (c) across timesteps
+        all_h = [h.unsqueeze(0)] # shape will become (1, nlayers, batch_size, hidden_dim)
+        all_c = [c.unsqueeze(0)] 
+
+        seq_len = input_tensor.size(0)
+
+        # Manually unroll LSTM over each time step
+        for t in range(seq_len):
+            # LSTM expects (1, batch_size, input_dim) for a single time step
+            x_t = input_tensor[t].unsqueeze(0)  
+            
+            # One-step forward
+            out, (h, c) = self.rnn(x_t, (h, c))
+            # out: (1, batch_size, hidden_dim)
+            # h, c: (nlayers, batch_size, hidden_dim)
+            
+            # Save the output for this timestep
+            # We'll keep 'out' expanded along a "sequence" dimension, so also unsqueeze(0) 
+            outputs.append(out.unsqueeze(0))  # (1, 1, batch_size, hidden_dim)
+
+            # Save the new hidden/cell states in all_h/all_c
+            all_h.append(h.unsqueeze(0))      # (1, nlayers, batch_size, hidden_dim)
+            all_c.append(c.unsqueeze(0))
+
+            # ------------------------------------------------
+            # Append to `data`:
+            #   1) Each layer's hidden state h[layer]
+            #   2) Each layer's cell state   c[layer]
+            #   3) The output vector out[0]
+            # ------------------------------------------------
+            for layer in range(self.nlayers):
+                data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
+                data.append(c[layer, :, :].unsqueeze(0))
+                print("c shape: ", data[-1].shape)
+                print("h shape: ", data[-2].shape)
+            # Append the current output. out has shape (1, batch, hidden_dim), 
+            # so out[0] has shape (batch_size, hidden_dim)
+            data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim), will unsqueeze later
+            print('input_tensor shape: ', input_tensor[t].unsqueeze(0).shape)   
+            
+            # ------------------------------------------------
+            # Manage the `mask` just as in your RNN code
+            # ------------------------------------------------
+            if t == 0:
+                # The first time step is special-cased in your original code
+                # We have 2 * nlayers + 1 items per time step in data 
+                # (h + c for each layer, and out)
+                mask.extend([0] * (2 * self.nlayers + 1))
+            else:
+                mask.extend([1] * (2 * self.nlayers) + [0])
+
+        # ------------------------------------------------
+        # Convert collected lists into tensors
+        # ------------------------------------------------
+
+        # outputs: shape (seq_len, 1, batch_size, hidden_dim) => (seq_len, batch_size, hidden_dim)
+        outputs = torch.cat(outputs, dim=0)  # cat across time step dimension
+        outputs = outputs.squeeze(1)         # remove the dummy "layer" dimension => (seq_len, batch_size, hidden_dim)
+
+        # all_h/all_c: each is (seq_len+1, nlayers, batch_size, hidden_dim)
+        all_h = torch.cat(all_h, dim=0)
+        all_c = torch.cat(all_c, dim=0)
+
+        # data: for each time step, we appended (nlayers h) + (nlayers c) + (1 out) 
+        # which is (2 * nlayers + 1) items per timestep
+        # each item is (batch_size, hidden_dim), so stack them all
+        #data = [d.unsqueeze(0) for d in data]        # now each is (1, batch_size, hidden_dim)
+        data = torch.cat(data, dim=0)                # shape => (seq_len*(2*nlayers + 1), batch_size, hidden_dim)
+        print('data shape: ', data.shape)
+        # mask (optional if you’re not using it)
+        mask = torch.tensor(mask[1:])  # skip the very first element as in your code
+        print('mask shape: ', mask)
+        print('outputs shape: ', outputs.shape)
+        print("all_h shape: ", all_h.shape)
+        print("all_c shape: ", all_c.shape)
+        # Return everything
+        # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
+        return outputs, (all_h, all_c), data, mask
 
 # Temporarily leave PositionalEncoding module here. Will be moved somewhere else.
 class PositionalEncoding(nn.Module):
@@ -233,34 +340,38 @@ class MultiLayerElmanRNN(nn.Module):
 
 if __name__ == '__main__': 
     # number of tokens, dim input, dim hidden, number of layers, dropout
-    seq_len = 9
+    seq_len = 7
     batch_size = 32
     input_dim = 10
     hidden_dim = 10
     num_layers = 2
     num_tokens = 100
     
-    model = RNNModel('RNN_TANH', num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
+    rnn_type = 'LSTM'
+    #rnn_type = 'RNN_TANH'
+    #model = RNNModel('RNN_TANH', num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
+    model = RNNModel(rnn_type, num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
     model.init_weights()
     model.eval()
 
     #input is of dimension (seq_len, batch, input_dim)
     input_tensor = torch.randn(seq_len, batch_size, input_dim)
-    outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+    #outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+    outputs, all_hidden_states, data, mask = model.collect_hidden_states_LSTM(input_tensor, model.init_hidden(batch_size))
 
     #print("all_hidden_states shape: ", all_hidden_states.shape)
     #print('all_hidden_states: ', all_hidden_states)
-    print('data: ', data)
+    #print('data: ', data)
     print('data shape: ', data.shape)
     print('mask: ', mask)
 
-    f = 'saved_models/model.pth'
-    torch.save(model, f)
-    model = torch.load(f, weights_only=False)
-    model.eval()
-    outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
+    #f = 'saved_models/model.pth'
+    #torch.save(model, f)
+    #model = torch.load(f, weights_only=False)
+    #model.eval()
+    #outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
     
-    print('data shape: ', data.shape)
-    print('saved then output mask: ', mask)
+    #print('data shape: ', data.shape)
+    #print('saved then output mask: ', mask)
 
 
