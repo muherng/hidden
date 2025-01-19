@@ -56,7 +56,7 @@ parser.add_argument('--dry-run', action='store_true',
 def batchify(data, bsz, device='cpu'):
     # Work out how cleanly we can divide the dataset into bsz parts.
     nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (reders).
+    # Trim off any extra elements that wouldn't cleanly fit (renders).
     data = data.narrow(0, 0, nbatch * bsz)
     # Evenly divide the data across the bsz batches.
     data = data.view(bsz, -1).t().contiguous()
@@ -85,6 +85,9 @@ def get_batch(source, i, args):
     seq_len = min(args.bptt, len(source) - 1 - i)
     data = source[i:i+seq_len]
     target = source[i+1:i+1+seq_len].view(-1)
+
+    print('data', data.size())
+    raise ValueError('stop here')
     return data, target
 
 
@@ -202,6 +205,10 @@ if __name__ == '__main__':
     train_data = batchify(corpus.train, args.batch_size, device=device)
     val_data = batchify(corpus.valid, eval_batch_size, device=device)
     test_data = batchify(corpus.test, eval_batch_size, device=device)
+
+    print('train_data', train_data.size())
+    print('train_data', train_data[0])
+    #raise ValueError('stop here')
 
     ###############################################################################
     # Build the model
