@@ -1,7 +1,6 @@
 import torch
 from torch.utils.data import Dataset
-
-debug = False
+import data
 
 # ----------------------------------------------------
 # 1. Synthetic Dataset of Random Vectors
@@ -453,7 +452,7 @@ class LSTM_Dataset(Dataset):
             "mask": self.mask
         }   
     
-    def generate_sequences(self):   
+    def generate_sequences(self,mode='random'):   
         # Specify the device as CUDA
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -477,19 +476,36 @@ class LSTM_Dataset(Dataset):
         
         with torch.no_grad():
             # Create random inputs with desired shape
-            input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
-            
-            # Permute to match the torch RNN input format (seq_len, batch_size, input_dim)
-            input_rnn = input_tensor.permute(1, 0, 2).contiguous()
+            if mode == 'random': 
+                input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
+                # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
+                input_rnn = input_tensor.permute(1, 0, 2).contiguous()
 
-            outputs, all_hidden_states, data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
-            data = data.permute(1, 0, 2).contiguous()
+                outputs, all_hidden_states, data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
+                data = data.permute(1, 0, 2).contiguous()
+            if mode == 'dataset':
+                corpus = data.Corpus('./data/wikitext-2')
+                input_tokens = batchify(corpus.train, batch_size, device) 
             
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
         
         #torch.save(data, f'hidden_states/RNN_TANH_{input_dim}_data.pt') 
-        return data.cpu(), mask.cpu()   
+        return data.cpu(), mask.cpu() 
+
+    def evaluate(data_source):
+        # Turn on evaluation mode which disables dropout.
+        model.eval()
+        total_loss = 0.
+        ntokens = len(corpus.dictionary)
+        hidden = model.init_hidden(eval_batch_size)
+        with torch.no_grad():
+            for i in range(0, data_source.size(0) - 1, args.bptt):
+                data, targets = get_batch(data_source, i, args)
+                output, hidden = model(data, hidden)
+                hidden = repackage_hidden(hidden)
+                total_loss += len(data) * criterion(output, targets).item()
+        return total_loss / (len(data_source) - 1)  
 
 
 
