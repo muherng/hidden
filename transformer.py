@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
     parser.add_argument('--data', type=str, default='RNN',
                     help='options are [random, rotation, LDS, RNN_TANH, RNN]')
-    parser.add_argument('--input_dim', type=int, default=10,
+    parser.add_argument('--input_dim', type=int, default=100,
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
