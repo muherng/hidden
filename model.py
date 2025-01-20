@@ -110,14 +110,19 @@ class RNNModel(nn.Module):
         # from all layers to the decoder.
         #for now assume input_dim and hidden_dim are equal
         #TODO: handle different input and hidden dimensions
-        print('input_tokens: ', input_tokens.shape)
-        input_tensor = self.encoder(input_tokens)
-        print('input_tensor: ', input_tensor.shape)
+        #print('input_tokens: ', input_tokens.shape)
+        #input_tensor = self.encoder(input_tokens)
+        #print('input_tensor: ', input_tensor.shape)
+        seq_len = input_tokens.size(0)
+        batch_size = input_tokens.size(1)
+        input_dim = self.encoder.embedding_dim
+        input_tensor = torch.randn(batch_size, seq_len, input_dim, device='cuda')
+        # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
+        input_tensor = input_tensor.permute(1, 0, 2).contiguous()
         # Unpack the initial hidden states (h0, c0)
         h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
 
         # We’ll collect everything in lists first.
-        outputs = []
         data = []
         mask = []
 
@@ -129,26 +134,24 @@ class RNNModel(nn.Module):
             for layer in range(self.nlayers):
                 data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
                 data.append(c[layer, :, :].unsqueeze(0))
-                #print("c shape: ", data[-1].shape)
-                #print("h shape: ", data[-2].shape)
-            #print('input_tensor slice shape: ', input_tensor[t].unsqueeze(0).shape)
             data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim)
             # LSTM expects (1, batch_size, input_dim) for a single time step
+            # out: (1, batch_size, hidden_dim)
+            # h, c: (nlayers, batch_size, hidden_dim)
+            #print('out shape: ', out.shape)
+            if t == 0:
+                #start with hidden0, out0, input0, hidden1, out1, input1, hidden2, out2 ...
+                # We have 2 * nlayers + 1 items per time step in data 
+                # (h + c for each layer, input, and out) 
+                #we predict the first out based on the initial hidden states and initial input
+                mask.extend([0] * 2 * self.nlayers + [0])
+            else:
+                mask.extend([1] * (2 * self.nlayers) + [0])
+
             x_t = input_tensor[t].unsqueeze(0)  
             # One-step forward
             out, hidden = self.rnn(x_t, (h, c))
             (h,c) = hidden
-            # out: (1, batch_size, hidden_dim)
-            # h, c: (nlayers, batch_size, hidden_dim)
-            #print('out shape: ', out.shape)
-            data.append(out)  # shape (1, batch_size, hidden_dim), will unsqueeze later
-            if t == 0:
-                # We have 2 * nlayers + 1 items per time step in data 
-                # (h + c for each layer, input, and out) 
-                #we predict the first out based on the initial hidden states and initial input
-                mask.extend([0] * (2 * self.nlayers + 1) + [1])
-            else:
-                mask.extend([1] * (2 * self.nlayers) + [0] + [1])
 
         # data: for each time step, we appended (nlayers h) + (nlayers c) + (1 input) + (1 out) 
         # which is (2 * nlayers + 2) tokens per timestep
@@ -160,13 +163,13 @@ class RNNModel(nn.Module):
         #print('mask shape: ', mask.shape)
         #print('mask: ', mask)
 
-        if data.shape != (seq_len*(2*self.nlayers + 2), batch_size, self.nhid):
+        if data.shape != (seq_len*(2*self.nlayers + 1), batch_size, self.nhid):
             print("data shape: ", data.shape)
-            print("expected shape: ", (seq_len*(2*self.nlayers + 2), batch_size, self.nhid))
+            print("expected shape: ", (seq_len*(2*self.nlayers + 1), batch_size, self.nhid))
             raise ValueError("Shape mismatch in data tensor")
-        if mask.shape[0] != (seq_len*(2*self.nlayers + 2) - 1):
+        if mask.shape[0] != (seq_len*(2*self.nlayers + 1) - 1):
             print("mask shape: ", mask.shape)
-            print("expected shape: ", (seq_len*(2*self.nlayers + 2) - 1))
+            print("expected shape: ", (seq_len*(2*self.nlayers + 1) - 1))
             raise ValueError("Shape mismatch in mask tensor")
 
         # Return everything
