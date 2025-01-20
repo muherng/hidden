@@ -225,88 +225,51 @@ class RNNModel(nn.Module):
         h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
 
         # We’ll collect everything in lists first.
-        outputs = []
         data = []
-        mask = []
-
-        # We'll keep track of all hidden states (h) and cell states (c) across timesteps
-        all_h = [h.unsqueeze(0)] # shape will become (1, nlayers, batch_size, hidden_dim)
-        all_c = [c.unsqueeze(0)] 
+        mask = []  # Initial mask
+        #length of mask is 2*self.nlayers + seq_len * (1+2*self.nlayers) 
 
         seq_len = input_tensor.size(0)
+        batch_size = input_tensor.size(1)
 
         # Manually unroll LSTM over each time step
         for t in range(seq_len):
-            # LSTM expects (1, batch_size, input_dim) for a single time step
-            x_t = input_tensor[t].unsqueeze(0)  
-            
-            # One-step forward
-            out, (h, c) = self.rnn(x_t, (h, c))
-            # out: (1, batch_size, hidden_dim)
-            # h, c: (nlayers, batch_size, hidden_dim)
-            
-            # Save the output for this timestep
-            # We'll keep 'out' expanded along a "sequence" dimension, so also unsqueeze(0) 
-            outputs.append(out.unsqueeze(0))  # (1, 1, batch_size, hidden_dim)
-
-            # Save the new hidden/cell states in all_h/all_c
-            all_h.append(h.unsqueeze(0))      # (1, nlayers, batch_size, hidden_dim)
-            all_c.append(c.unsqueeze(0))
-
-            # ------------------------------------------------
-            # Append to `data`:
-            #   1) Each layer's hidden state h[layer]
-            #   2) Each layer's cell state   c[layer]
-            #   3) The output vector out[0]
-            # ------------------------------------------------
+            #first append the initial hidden/cell states for each layer
             for layer in range(self.nlayers):
                 data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
                 data.append(c[layer, :, :].unsqueeze(0))
                 print("c shape: ", data[-1].shape)
                 print("h shape: ", data[-2].shape)
-            # Append the current output. out has shape (1, batch, hidden_dim), 
-            # so out[0] has shape (batch_size, hidden_dim)
+            #second, append the first input tensor
             data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim), will unsqueeze later
-            print('input_tensor shape: ', input_tensor[t].unsqueeze(0).shape)   
-            
-            # ------------------------------------------------
-            # Manage the `mask` just as in your RNN code
-            # ------------------------------------------------
-            if t == 0:
-                # The first time step is special-cased in your original code
-                # We have 2 * nlayers + 1 items per time step in data 
-                # (h + c for each layer, and out)
+            print('input_tensor shape: ', input_tensor[t].unsqueeze(0).shape) 
+            if t == 0: 
                 mask.extend([0] * (2 * self.nlayers + 1))
-            else:
-                mask.extend([1] * (2 * self.nlayers) + [0])
+            else: 
+                mask.extend([1] * 2 * self.nlayers + [0])
+            # LSTM expects (1, batch_size, input_dim) for a single time step
+            x_t = input_tensor[t].unsqueeze(0)  
+            # One-step forward
+            out, (h, c) = self.rnn(x_t, (h, c))
+            # out: (1, batch_size, hidden_dim)
+            # h, c: (nlayers, batch_size, hidden_dim)
 
-        # ------------------------------------------------
-        # Convert collected lists into tensors
-        # ------------------------------------------------
-
-        # outputs: shape (seq_len, 1, batch_size, hidden_dim) => (seq_len, batch_size, hidden_dim)
-        outputs = torch.cat(outputs, dim=0)  # cat across time step dimension
-        outputs = outputs.squeeze(1)         # remove the dummy "layer" dimension => (seq_len, batch_size, hidden_dim)
-
-        # all_h/all_c: each is (seq_len+1, nlayers, batch_size, hidden_dim)
-        all_h = torch.cat(all_h, dim=0)
-        all_c = torch.cat(all_c, dim=0)
-
-        # data: for each time step, we appended (nlayers h) + (nlayers c) + (1 out) 
-        # which is (2 * nlayers + 1) items per timestep
-        # each item is (batch_size, hidden_dim), so stack them all
-        #data = [d.unsqueeze(0) for d in data]        # now each is (1, batch_size, hidden_dim)
-        data = torch.cat(data, dim=0)                # shape => (seq_len*(2*nlayers + 1), batch_size, hidden_dim)
+        data = torch.cat(data, dim=0)
         print('data shape: ', data.shape)
-        # mask (optional if you’re not using it)
-        mask = torch.tensor(mask[1:])  # skip the very first element as in your code
+        mask = torch.tensor(mask[1:])  # skip the very first element
         print('mask shape: ', mask)
-        print('outputs shape: ', outputs.shape)
-        print("all_h shape: ", all_h.shape)
-        print("all_c shape: ", all_c.shape)
+        print('data shape: ', data.shape)
+        if data.shape != (seq_len*(2*self.nlayers + 1), batch_size, self.nhid):
+            print("data shape: ", data.shape)
+            print("expected shape: ", (seq_len*(2*self.nlayers + 1), batch_size, self.nhid))
+            raise ValueError("Shape mismatch in data tensor")
+        if mask.shape[0] != (seq_len*(2*self.nlayers + 1) - 1):
+            print("mask shape: ", mask.shape)
+            print("expected shape: ", (seq_len*(2*self.nlayers + 1) - 1))
+            raise ValueError("Shape mismatch in mask tensor")
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return outputs, (all_h, all_c), data, mask
+        return data, mask
 
 # Temporarily leave PositionalEncoding module here. Will be moved somewhere else.
 class PositionalEncoding(nn.Module):
