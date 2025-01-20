@@ -477,6 +477,16 @@ class LSTM_Dataset(Dataset):
         
         mode = 'dataset'
         batch_size = 20
+
+        def get_batch(source, i, seq_len):
+            seq_len = min(seq_len, len(source) - 1 - i)
+            data = source[i:i+seq_len]
+            target = source[i+1:i+1+seq_len].view(-1)
+
+            print('data', data.size())
+            #raise ValueError('stop here')
+            return data, target
+
         with torch.no_grad():
             # Create random inputs with desired shape
             if mode == 'random': 
@@ -492,13 +502,24 @@ class LSTM_Dataset(Dataset):
                 ntokens = len(corpus.dictionary)
                 hidden = model.init_hidden(batch_size)
                 data_total = []
+                mask = []
+                #train_data.size(0) - 1
+                #max_batches = int(num_samples/batch_size) 
                 for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
-                    data_batch,mask = model.collect_hidden_from_tokens(hidden, input_batch)
+                    data_batch, mask_batch, hidden = model.collect_hidden_from_tokens(hidden, input_batch)
+                    if data_batch.size(0) != seq_len*(2*self.num_layers + 2):
+                        print('skipping batch: ', batch)
+                        continue
+                    if batch == 0: 
+                        mask = mask_batch 
                     data_total.append(data_batch)
                     #raise ValueError('Not implemented yet')
                     #output, hidden = model(data, hidden)
-            
+                data_total = torch.cat(data_total, dim=1)
+                data_total = data_total.permute(1, 0, 2).contiguous()
+                data_total = data_total[:num_samples]
+                print('data_total.size(): ', data_total.size())
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
         
@@ -519,14 +540,6 @@ class LSTM_Dataset(Dataset):
                 total_loss += len(data) * criterion(output, targets).item()
         return total_loss / (len(data_source) - 1)  
     
-def get_batch(source, i, seq_len):
-    seq_len = min(seq_len, len(source) - 1 - i)
-    data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].view(-1)
-
-    print('data', data.size())
-    #raise ValueError('stop here')
-    return data, target
 
 
 
