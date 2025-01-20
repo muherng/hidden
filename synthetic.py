@@ -507,7 +507,8 @@ class LSTM_Dataset(Dataset):
                 #max_batches = int(num_samples/batch_size) 
                 for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
-                    data_batch, mask_batch, hidden = model.collect_hidden_from_tokens(hidden, input_batch)
+                    #data_batch, mask_batch, hidden = model.collect_hidden_from_tokens(hidden, input_batch)
+                    data_batch, mask_batch, hidden = model.collect_hidden_from_tokens(model.init_hidden(batch_size), input_batch)
                     if data_batch.size(0) != seq_len*(2*self.num_layers + 1):
                         print('skipping batch: ', batch)
                         continue
