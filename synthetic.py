@@ -417,7 +417,7 @@ class RNN_Dataset(Dataset):
             # Permute to match the torch RNN input format (seq_len, batch_size, input_dim)
             input_rnn = input_tensor.permute(1, 0, 2).contiguous()
 
-            outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_rnn, model.init_hidden(num_samples))
+            data, mask = model.collect_hidden_states_RNN(input_rnn, model.init_hidden(num_samples))
             data = data.permute(1, 0, 2).contiguous()
             
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
@@ -475,7 +475,7 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        mode = 'random'
+        mode = 'dataset'
         batch_size = 20
         with torch.no_grad():
             # Create random inputs with desired shape
@@ -493,10 +493,10 @@ class LSTM_Dataset(Dataset):
                 hidden = model.init_hidden(batch_size)
                 data_total = []
                 for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
-                    data_batch, targets = get_batch(train_data, i, seq_len)
-                    output,all_hidden_states,data,mask = model.collect_hidden_from_tokens(hidden, data_batch)
+                    input_batch, targets = get_batch(train_data, i, seq_len)
+                    data_batch,mask = model.collect_hidden_from_tokens(hidden, input_batch)
                     data_total.append(data_batch)
-                    raise ValueError('Not implemented yet')
+                    #raise ValueError('Not implemented yet')
                     #output, hidden = model(data, hidden)
             
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
