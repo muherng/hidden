@@ -285,7 +285,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=1,     # Accumulate gradients over 1 step
         fp16=True,                         # Use mixed precision (FP16)
         max_grad_norm=1.0,                 # Gradient clipping
-        num_train_epochs=1,                # Fewer epochs to prevent overfitting
+        num_train_epochs=10,                # Fewer epochs to prevent overfitting
         report_to="tensorboard",           # Log to TensorBoard
         seed=42,                           # Set seed for reproducibility
     )

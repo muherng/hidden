@@ -129,17 +129,18 @@ class RNNModel(nn.Module):
             for layer in range(self.nlayers):
                 data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
                 data.append(c[layer, :, :].unsqueeze(0))
-                print("c shape: ", data[-1].shape)
-                print("h shape: ", data[-2].shape)
-            print('input_tensor slice shape: ', input_tensor[t].unsqueeze(0).shape)
+                #print("c shape: ", data[-1].shape)
+                #print("h shape: ", data[-2].shape)
+            #print('input_tensor slice shape: ', input_tensor[t].unsqueeze(0).shape)
             data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim)
             # LSTM expects (1, batch_size, input_dim) for a single time step
             x_t = input_tensor[t].unsqueeze(0)  
             # One-step forward
-            out, (h, c) = self.rnn(x_t, (h, c))
+            out, hidden = self.rnn(x_t, (h, c))
+            (h,c) = hidden
             # out: (1, batch_size, hidden_dim)
             # h, c: (nlayers, batch_size, hidden_dim)
-            print('out shape: ', out.shape)
+            #print('out shape: ', out.shape)
             data.append(out)  # shape (1, batch_size, hidden_dim), will unsqueeze later
             if t == 0:
                 # We have 2 * nlayers + 1 items per time step in data 
@@ -153,11 +154,11 @@ class RNNModel(nn.Module):
         # which is (2 * nlayers + 2) tokens per timestep
         # each token is (batch_size, hidden_dim), so stack them all
         data = torch.cat(data, dim=0)                # shape => (seq_len*(2*nlayers + 2), batch_size, hidden_dim)
-        print('data shape: ', data.shape)
+        #print('data shape: ', data.shape)
         # mask (optional if you’re not using it)
         mask = torch.tensor(mask[1:])  # skip the very first element as in your code
-        print('mask shape: ', mask.shape)
-        print('mask: ', mask)
+        #print('mask shape: ', mask.shape)
+        #print('mask: ', mask)
 
         if data.shape != (seq_len*(2*self.nlayers + 2), batch_size, self.nhid):
             print("data shape: ", data.shape)
@@ -170,7 +171,7 @@ class RNNModel(nn.Module):
 
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return data, mask       
+        return data, mask, hidden       
 
     def collect_hidden_states_LSTM(self, input_tensor, hidden):
         """
