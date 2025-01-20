@@ -475,7 +475,7 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        mode = 'dataset'
+        mode = 'random'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -491,9 +491,11 @@ class LSTM_Dataset(Dataset):
             # Create random inputs with desired shape
             if mode == 'random': 
                 input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
+                #model.init_hidden(num_samples)
+                hidden = (torch.randn(2,num_samples,input_dim, device='cuda'), torch.randn(2,num_samples,input_dim,device='cuda'))
                 # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
                 input_rnn = input_tensor.permute(1, 0, 2).contiguous()
-                data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
+                data, mask = model.collect_hidden_states_LSTM(input_rnn, hidden)
                 data_total = data.permute(1, 0, 2).contiguous()
             if mode == 'dataset':
                 corpus = Corpus('./data/wikitext-2')
