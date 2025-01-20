@@ -111,14 +111,14 @@ class RNNModel(nn.Module):
         #for now assume input_dim and hidden_dim are equal
         #TODO: handle different input and hidden dimensions
         #print('input_tokens: ', input_tokens.shape)
-        #input_tensor = self.encoder(input_tokens)
+        input_tensor = self.encoder(input_tokens)
         #print('input_tensor: ', input_tensor.shape)
-        seq_len = input_tokens.size(0)
-        batch_size = input_tokens.size(1)
-        input_dim = self.encoder.embedding_dim
-        input_tensor = torch.randn(batch_size, seq_len, input_dim, device='cuda')
-        # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
-        input_tensor = input_tensor.permute(1, 0, 2).contiguous()
+        
+        #seq_len = input_tokens.size(0)
+        #batch_size = input_tokens.size(1)
+        #input_dim = self.encoder.embedding_dim
+        #input_tensor = torch.randn(batch_size, seq_len, input_dim, device='cuda')
+        #input_tensor = input_tensor.permute(1, 0, 2).contiguous()
         # Unpack the initial hidden states (h0, c0)
         h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
 
