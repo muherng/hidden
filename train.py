@@ -86,7 +86,7 @@ def get_batch(source, i, args):
     data = source[i:i+seq_len]
     target = source[i+1:i+1+seq_len].view(-1)
 
-    print('data', data.size())
+    #print('data', data.size())
     #raise ValueError('stop here')
     return data, target
 

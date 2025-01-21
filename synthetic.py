@@ -475,7 +475,7 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        mode = 'random'
+        mode = 'dataset'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -491,11 +491,10 @@ class LSTM_Dataset(Dataset):
             # Create random inputs with desired shape
             if mode == 'random': 
                 input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
-                #model.init_hidden(num_samples)
-                hidden = (torch.randn(2,num_samples,input_dim, device='cuda'), torch.randn(2,num_samples,input_dim,device='cuda'))
+                #hidden = (torch.randn(2,num_samples,input_dim, device='cuda'), torch.randn(2,num_samples,input_dim,device='cuda'))
                 # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
                 input_rnn = input_tensor.permute(1, 0, 2).contiguous()
-                data, mask = model.collect_hidden_states_LSTM(input_rnn, hidden)
+                data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
                 data_total = data.permute(1, 0, 2).contiguous()
             if mode == 'dataset':
                 corpus = Corpus('./data/wikitext-2')
@@ -503,7 +502,7 @@ class LSTM_Dataset(Dataset):
                 #input_tokens = batchify(corpus.train, batch_size, device) 
                 ntokens = len(corpus.dictionary)
                 hidden = model.init_hidden(batch_size)
-                hidden = (torch.randn(2,batch_size,input_dim, device='cuda'), torch.randn(2,batch_size,input_dim,device='cuda'))
+                #hidden = (torch.randn(2,batch_size,input_dim, device='cuda'), torch.randn(2,batch_size,input_dim,device='cuda'))
                 data_total = []
                 mask = []
                 #train_data.size(0) - 1
@@ -522,7 +521,10 @@ class LSTM_Dataset(Dataset):
                     #output, hidden = model(data, hidden)
                 data_total = torch.cat(data_total, dim=1)
                 data_total = data_total.permute(1, 0, 2).contiguous()
-                data_total = data_total[:num_samples]
+                if data_total.size(0) > num_samples:
+                    data_total = data_total[:num_samples]
+                else: 
+                    self.num_samples = data_total.size(0)
                 print('data_total.size(): ', data_total.size())
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
