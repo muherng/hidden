@@ -143,7 +143,7 @@ class VectorGPTTrainer(Trainer):
             tgt = labels[:, 1:, :]  # (bsz, seq_len, vocab_size)
             
             pred = pred[:,mask,:]
-            tgt = tgt[:,mask,:]
+            tgt = tgt[:,mask,:]   
 
             huber_fn = nn.HuberLoss()
             loss = huber_fn(pred, tgt)
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     config = VectorGPTConfig(
         n_positions=2000,  # must be >= 30 (seq_len)
         n_embd=model_emb,      # hidden dimension
-        n_layer=12,       # transformer layers
+        n_layer=24,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
     )
