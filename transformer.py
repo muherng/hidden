@@ -325,7 +325,7 @@ if __name__ == "__main__":
                 json.dump(self.losses, f, indent=4)
 
     # Add the callback to the Trainer
-    trainer.add_callback(SaveLossCallback(f"./results/{args.input_dim}_{args.num_layers}losses.json"))
+    trainer.add_callback(SaveLossCallback(f"./results/output_{args.input_dim}_{args.num_layers}losses.json"))
 
     # 5. Start training
     trainer.train()
@@ -338,7 +338,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # Load the JSON file
-    with open(f"./results/{args.input_dim}_{args.num_layers}losses.json", "r") as f:
+    with open(f"./results/output_{args.input_dim}_{args.num_layers}losses.json", "r") as f:
         losses = json.load(f)
 
     # Extract training and validation losses
@@ -354,9 +354,9 @@ if __name__ == "__main__":
     # Add labels and title
     plt.xlabel("Steps")
     plt.ylabel("Loss")
-    plt.title("Training and Validation Loss MSE Over Steps=160")
+    plt.title("Training and Validation Loss MSE ")
     plt.legend()
     plt.grid(True)
 
-    plt.savefig(f'./plots/{args.input_dim}_{args.num_layers}loss_plot.png')
+    plt.savefig(f'./plots/output_{args.input_dim}_{args.num_layers}loss_plot.png')
 
