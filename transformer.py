@@ -212,6 +212,9 @@ if __name__ == "__main__":
                     help='length of each sequence')
     parser.add_argument('--num_layers', type=int, default=1,
                     help='number of layers in data generating model')
+    parser.add_argument('--model_emb', type=int, default=768,
+                    help='dimension of embedding in transformer model')
+                
     
     args = parser.parse_args()
     print('args: ', args)
@@ -219,6 +222,7 @@ if __name__ == "__main__":
     num_samples = args.num_samples
     seq_len = args.seq_len
     num_layers = args.num_layers
+    model_emb = args.model_emb
 
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
@@ -252,8 +256,8 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
-        n_positions=64,  # must be >= 30 (seq_len)
-        n_embd=768,      # hidden dimension
+        n_positions=2000,  # must be >= 30 (seq_len)
+        n_embd=model_emb,      # hidden dimension
         n_layer=12,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
