@@ -475,7 +475,8 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        mode = 'dataset'
+        #mode = 'dataset'
+        mode = 'load'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -526,10 +527,16 @@ class LSTM_Dataset(Dataset):
                 else: 
                     self.num_samples = data_total.size(0)
                 print('data_total.size(): ', data_total.size())
+                torch.save(data_total, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt') 
+                torch.save(mask, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
+            if mode == 'load': 
+                data_total = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt')
+                mask = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
+                print('data_total.size(): ', data_total.size())
+                print('mask.size(): ', mask.size())
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
-        
-        #torch.save(data, f'hidden_states/RNN_TANH_{input_dim}_data.pt') 
+    
         return data_total.cpu(), mask.cpu() 
 
     def evaluate(data_source):

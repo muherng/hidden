@@ -113,6 +113,7 @@ class VectorGPTTrainer(Trainer):
     def __init__(self, *args, mask=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.mask = mask
+        self.print_interval = 1000
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -133,20 +134,50 @@ class VectorGPTTrainer(Trainer):
                 print('warning: no mask provided, using default mask')
                 mask = torch.arange(labels.size(1)-1) % 2 == 1  # (seq_len - 1,)
             #ensure mask is of the right length for the labels shifted by one
-            mask = mask[:labels.size(1)-1]
+            mask = mask[:labels.size(1)-1].bool()
             mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
+            
             #print('mask size: ', mask.size())
             #print('mask:', mask)
             
             # Apply the mask to predictions and labels
             pred = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
             tgt = labels[:, 1:, :]  # (bsz, seq_len, vocab_size)
+            #create a copy of prediction before masking 
+            pred_copy = pred.clone()
             
+            #mask = torch.zeros(labels.size(1) - 1, dtype=torch.bool)
+            mask = mask.bool()
             pred = pred[:,mask,:]
             tgt = tgt[:,mask,:]   
 
-            huber_fn = nn.HuberLoss()
+            huber_fn = nn.HuberLoss(reduction="none")
             loss = huber_fn(pred, tgt)
+
+            # Print the coordinates with the largest loss intermittently
+            if self.state.global_step % self.print_interval == 0:
+                print('mask size: ', mask.size())
+                print('mask: ', mask)
+                #print('logits size: ', logits.size())
+                print('pred size: ', pred.size())
+                print('tgt size: ', tgt.size())
+                print('loss size: ', loss.size())
+                print('loss[0,:,0]', loss[0,:,0])
+                #print('pred_copy size: ', pred_copy.size())
+                #print('pred_copy: ', pred_copy[0,:,0])
+                print('pred: ', pred[0,:,0])
+                #tgt_check = inputs['inputs'][0,1:,0]
+                #tgt_check = tgt_check[mask]
+                #print('inputs: ', tgt_check)
+                print('tgt: ', tgt[0,:,0])
+                max_loss, max_indices = torch.max(loss[0,:,0],dim=0)
+                print(f"Step {self.state.global_step}: Max Huber loss coordinates: {max_indices}, values: {max_loss}")
+                 # Print the inputs dictionary
+                #print('inputs:')
+                #for key, value in inputs.items():
+                #    print(f"{key}")
+                #print(f"Step {self.state.global_step}: Max Huber loss coordinates: {max_indices}")
+            loss = loss.mean()
         else:
             loss = None
 
@@ -214,6 +245,8 @@ if __name__ == "__main__":
                     help='number of layers in data generating model')
     parser.add_argument('--model_emb', type=int, default=768,
                     help='dimension of embedding in transformer model')
+    parser.add_argument('--model_layers', type=int, default=12,
+                    help='layers in transformer model')
                 
     
     args = parser.parse_args()
@@ -223,6 +256,7 @@ if __name__ == "__main__":
     seq_len = args.seq_len
     num_layers = args.num_layers
     model_emb = args.model_emb
+    model_layers = args.model_layers
 
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
@@ -258,7 +292,7 @@ if __name__ == "__main__":
     config = VectorGPTConfig(
         n_positions=2000,  # must be >= 30 (seq_len)
         n_embd=model_emb,      # hidden dimension
-        n_layer=24,       # transformer layers
+        n_layer=model_layers,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
     )
@@ -266,7 +300,7 @@ if __name__ == "__main__":
  
     # 3. Training arguments
     training_args = TrainingArguments(
-        output_dir="./vector_gpt_trainer",  # Directory to save checkpoints
+        output_dir="./other_gpt_trainer",  # Directory to save checkpoints
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=True,         # Overwrite existing output dir
         eval_strategy="steps",             # Evaluate at the end of each epoch
@@ -325,7 +359,47 @@ if __name__ == "__main__":
                 json.dump(self.losses, f, indent=4)
 
     # Add the callback to the Trainer
-    trainer.add_callback(SaveLossCallback(f"./results/output_{args.input_dim}_{args.num_layers}losses.json"))
+    trainer.add_callback(SaveLossCallback(f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}losses.json"))
+
+    from transformers import TrainerCallback
+    import matplotlib.pyplot as plt
+
+    class PlotLossCallback(TrainerCallback):
+        def __init__(self, output_file, plot_file, plot_interval=100):
+            super().__init__()
+            self.output_file = output_file
+            self.plot_file = plot_file
+            self.plot_interval = plot_interval
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            # Only plot every 'plot_interval' steps
+            if state.global_step % self.plot_interval == 0 and state.global_step > 0:
+                with open(self.output_file, "r") as f:
+                    losses = json.load(f)
+
+                training_loss = losses.get("training_loss", [])
+                validation_loss = losses.get("validation_loss", [])
+
+                plt.figure(figsize=(10, 6))
+                plt.plot(training_loss, label="Training Loss", marker="o")
+                if validation_loss:
+                    plt.plot(validation_loss, label="Validation Loss", marker="x")
+                plt.xlabel("Steps")
+                plt.ylabel("Loss")
+                plt.title("Training and Validation Loss")
+                plt.legend()
+                plt.grid(True)
+                plt.savefig(self.plot_file)
+                plt.close()
+
+    # Then add the callback to your Trainer:
+    plot_callback = PlotLossCallback(
+        f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}losses.json",
+        f'./plots/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}loss_plot.png',
+        plot_interval=200  # for example
+    )
+
+    trainer.add_callback(plot_callback)
 
     # 5. Start training
     trainer.train()
@@ -335,9 +409,7 @@ if __name__ == "__main__":
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
 
-    import matplotlib.pyplot as plt
-
-    # Load the JSON file
+"""     # Load the JSON file
     with open(f"./results/output_{args.input_dim}_{args.num_layers}losses.json", "r") as f:
         losses = json.load(f)
 
@@ -358,5 +430,5 @@ if __name__ == "__main__":
     plt.legend()
     plt.grid(True)
 
-    plt.savefig(f'./plots/output_{args.input_dim}_{args.num_layers}loss_plot.png')
+    plt.savefig(f'./plots/output_{args.input_dim}_{args.num_layers}loss_plot.png') """
 
