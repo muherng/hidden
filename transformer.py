@@ -14,6 +14,12 @@ from sklearn.model_selection import train_test_split
 #synthetic dataset imports
 from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset, RNN_Dataset, LSTM_Dataset
 import argparse
+import os
+
+import datetime
+
+# Generate a unique timestamp
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -299,10 +305,15 @@ if __name__ == "__main__":
     model = VectorGPTModel(config)
  
     # 3. Training arguments
+    # Check if the directory exists, and create it if it does not
+    output_dir = f"./vector_gpt_trainer/{args.model_emb}_{args.model_layers}_{timestamp}"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # 3. Training arguments
     training_args = TrainingArguments(
-        output_dir="./other_gpt_trainer",  # Directory to save checkpoints
+        output_dir=f"./vector_gpt_trainer/{args.model_emb}_{args.model_layers}_{timestamp}",  # Directory to save checkpoints
         save_steps=500,                    # Save checkpoint every 500 steps
-        overwrite_output_dir=True,         # Overwrite existing output dir
+        overwrite_output_dir=False,         # Overwrite existing output dir
         eval_strategy="steps",             # Evaluate at the end of each epoch
         eval_steps=10,                    # Evaluate every 100 steps
         save_strategy="steps",             # Save checkpoints every epoch
@@ -312,7 +323,7 @@ if __name__ == "__main__":
         load_best_model_at_end=True,       # Load the best model based on validation loss
         metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
         greater_is_better=False,           # Lower loss is better
-        learning_rate=3e-4,                # Lower learning rate for stability
+        learning_rate=3e-4,                # Lower learning rate for stability 3e-4 original setting
         weight_decay=0.01,                 # Weight decay for regularization
         adam_beta1=0.9,                    # First momentum parameter
         adam_beta2=0.98,                   # Second momentum parameter
@@ -359,7 +370,7 @@ if __name__ == "__main__":
                 json.dump(self.losses, f, indent=4)
 
     # Add the callback to the Trainer
-    trainer.add_callback(SaveLossCallback(f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}losses.json"))
+    trainer.add_callback(SaveLossCallback(f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}_{timestamp}losses.json"))
 
     from transformers import TrainerCallback
     import matplotlib.pyplot as plt
@@ -394,8 +405,8 @@ if __name__ == "__main__":
 
     # Then add the callback to your Trainer:
     plot_callback = PlotLossCallback(
-        f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}losses.json",
-        f'./plots/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}loss_plot.png',
+        f"./results/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}_{timestamp}losses.json",
+        f'./plots/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}_{timestamp}loss_plot.png',
         plot_interval=200  # for example
     )
 

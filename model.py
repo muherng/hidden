@@ -103,7 +103,7 @@ class RNNModel(nn.Module):
             raise ValueError("Shape mismatch in mask tensor")
         return data, mask
     
-    def collect_hidden_from_tokens(self, hidden, input_tokens):
+    def collect_hidden_from_tokens(self, hidden, out, input_tokens):
         # input_tokens: (seq_len, batch_size) of token indices
         # Collect hidden states from all layers of LSTM
         # This is useful for tasks like language modeling where we need to pass hidden states
@@ -134,6 +134,8 @@ class RNNModel(nn.Module):
             for layer in range(self.nlayers):
                 data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
                 data.append(c[layer, :, :].unsqueeze(0))
+            #appending out to data, which is (1,batch_size, hidden_dim) 
+            data.append(out)
             data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim)
             # LSTM expects (1, batch_size, input_dim) for a single time step
             # out: (1, batch_size, hidden_dim)
@@ -144,17 +146,15 @@ class RNNModel(nn.Module):
             # One-step forward
             out, hidden = self.rnn(x_t, (h, c))
             (h,c) = hidden
-            #appending out to data, which is (1,batch_size, hidden_dim) 
-            data.append(out)
 
             if t == 0:
                 #start with hidden0, input0, out0, hidden1, input1, out1, hidden2, input2 ...
                 # We have 2 * nlayers + 1 items per time step in data 
                 # (h + c for each layer, input, and out) 
                 #we predict the first out based on the initial hidden states and initial input
-                mask.extend([0] * 2 * self.nlayers + [0] + [1])
+                mask.extend([0] * 2 * self.nlayers + [1] + [0])
             else:
-                mask.extend([1] * (2 * self.nlayers) + [0] + [1])
+                mask.extend([1] * (2 * self.nlayers) + [1] + [0])
 
         # data: for each time step, we appended (nlayers h) + (nlayers c) + (1 input) + (1 out) 
         # which is (2 * nlayers + 2) tokens per timestep
@@ -177,7 +177,7 @@ class RNNModel(nn.Module):
 
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return data, mask, hidden       
+        return data, mask, hidden, out       
 
     def collect_hidden_states_LSTM(self, input_tensor, hidden):
         """
