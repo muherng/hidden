@@ -475,8 +475,8 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        #mode = 'dataset'
-        mode = 'load'
+        mode = 'dataset'
+        #mode = 'load'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -512,7 +512,7 @@ class LSTM_Dataset(Dataset):
                 for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
                     data_batch, mask_batch, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
-                    #data_batch, mask_batch, hidden = model.collect_hidden_from_tokens(init_hidden, input_batch)
+                    #data_batch, mask_batch, _,_ = model.collect_hidden_from_tokens(model.init_hidden(batch_size),torch.zeros(1, batch_size, input_dim, device=device), input_batch)
                     if data_batch.size(0) != seq_len*(2*self.num_layers + 2):
                         print('skipping batch: ', batch)
                         continue
