@@ -253,7 +253,8 @@ if __name__ == "__main__":
                     help='dimension of embedding in transformer model')
     parser.add_argument('--model_layers', type=int, default=12,
                     help='layers in transformer model')
-                
+    parser.add_argument('--epochs', type=int, default=10,
+                    help='epochs  to train transformer model')
     
     args = parser.parse_args()
     print('args: ', args)
@@ -263,6 +264,7 @@ if __name__ == "__main__":
     num_layers = args.num_layers
     model_emb = args.model_emb
     model_layers = args.model_layers
+    epochs = args.epochs
 
     if args.data == 'random': 
         dataset = RandomVectorDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
@@ -301,6 +303,9 @@ if __name__ == "__main__":
         n_layer=model_layers,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
+        #embd_pdrop=0.0,
+        #resid_pdrop=0.0,
+        #attn_pdrop=0.0
     )
     model = VectorGPTModel(config)
  
@@ -334,7 +339,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=1,     # Accumulate gradients over 1 step
         fp16=True,                         # Use mixed precision (FP16)
         max_grad_norm=1.0,                 # Gradient clipping
-        num_train_epochs=10,                # Fewer epochs to prevent overfitting
+        num_train_epochs=epochs,                # Fewer epochs to prevent overfitting
         report_to="tensorboard",           # Log to TensorBoard
         seed=42,                           # Set seed for reproducibility
     )
