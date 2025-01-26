@@ -436,8 +436,8 @@ class LSTM_Dataset(Dataset):
 
         #TODO: generate the dataset 
         #load the dataset
-        self.data, self.mask = self.generate_sequences()
-        print('data size: ', self.data.size())
+        self.data, self.mask, self.mask_out = self.generate_sequences()
+
 
     def __len__(self):
         return self.num_samples
@@ -446,7 +446,6 @@ class LSTM_Dataset(Dataset):
         return {
             "inputs": self.data[idx],  # Input sequence
             "labels": self.data[idx],  # Same as inputs for next-step prediction
-            "mask": self.mask
         }   
     
     def generate_sequences(self,mode='random'):   
@@ -503,15 +502,18 @@ class LSTM_Dataset(Dataset):
                 #hidden = (torch.randn(2,batch_size,input_dim, device='cuda'), torch.randn(2,batch_size,input_dim,device='cuda'))
                 data_total = []
                 mask = []
-                for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
+                mask_out = []
+                max_data = min(seq_len*num_samples, (int(train_data.size(0)/seq_len) - 1)*seq_len) 
+                for batch, i in enumerate(range(0, max_data, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
-                    data_batch, mask_batch, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
+                    data_batch, mask_batch, mask_out, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
                     #data_batch, mask_batch, _,_ = model.collect_hidden_from_tokens(model.init_hidden(batch_size),torch.zeros(1, batch_size, input_dim, device=device), input_batch)
                     if data_batch.size(0) != seq_len*(2*self.num_layers + 2):
                         print('skipping batch: ', batch)
                         continue
                     if batch == 0: 
                         mask = mask_batch 
+                        mask_out = mask_out
                     data_total.append(data_batch)
                     #raise ValueError('Not implemented yet')
                     #output, hidden = model(data, hidden)
@@ -533,7 +535,7 @@ class LSTM_Dataset(Dataset):
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
     
-        return data_total.cpu(), mask.cpu()  
+        return data_total.cpu(), mask.cpu(), mask_out.cpu()  
     
 class LSTM_Dataset(Dataset): 
     def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, num_layers = 1, seed=None):
