@@ -125,6 +125,7 @@ class RNNModel(nn.Module):
         # We’ll collect everything in lists first.
         data = []
         mask = []
+        mask_out = []
 
         seq_len = input_tensor.size(0)
         batch_size = input_tensor.size(1)
@@ -146,15 +147,16 @@ class RNNModel(nn.Module):
             # One-step forward
             out, hidden = self.rnn(x_t, (h, c))
             (h,c) = hidden
-
             if t == 0:
                 #start with hidden0, input0, out0, hidden1, input1, out1, hidden2, input2 ...
                 # We have 2 * nlayers + 1 items per time step in data 
                 # (h + c for each layer, input, and out) 
                 #we predict the first out based on the initial hidden states and initial input
                 mask.extend([0] * 2 * self.nlayers + [1] + [0])
+                mask_out.extend([0] * 2 * self.nlayers + [1] + [0])
             else:
                 mask.extend([1] * (2 * self.nlayers) + [1] + [0])
+                mask_out.extend([0] * 2 * self.nlayers + [1] + [0])
 
         # data: for each time step, we appended (nlayers h) + (nlayers c) + (1 input) + (1 out) 
         # which is (2 * nlayers + 2) tokens per timestep
@@ -162,9 +164,8 @@ class RNNModel(nn.Module):
         data = torch.cat(data, dim=0)                # shape => (seq_len*(2*nlayers + 2), batch_size, hidden_dim)
         #print('data shape: ', data.shape)
         # mask (optional if you’re not using it)
-        mask = torch.tensor(mask[1:])  # skip the very first element as in your code
-        #print('mask shape: ', mask.shape)
-        #print('mask: ', mask)
+        mask = torch.tensor(mask[1:])  # skip the very first element
+        mask_out = torch.tensor(mask_out[1:]) 
 
         if data.shape != (seq_len*(2*self.nlayers + 2), batch_size, self.nhid):
             print("data shape: ", data.shape)
@@ -177,7 +178,7 @@ class RNNModel(nn.Module):
 
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return data, mask, hidden, out       
+        return data, mask, mask_out, hidden, out,      
 
     def collect_hidden_states_LSTM(self, input_tensor, hidden):
         """
@@ -228,6 +229,7 @@ class RNNModel(nn.Module):
             x_t = input_tensor[t].unsqueeze(0)  
             # One-step forward
             out, (h, c) = self.rnn(x_t, (h, c))
+
             # out: (1, batch_size, hidden_dim)
             # h, c: (nlayers, batch_size, hidden_dim)
 

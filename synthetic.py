@@ -203,10 +203,6 @@ class CustomRNN:
         self.W_hh = original_model.rnn.weight_hh_l0
         self.b_ih = original_model.rnn.bias_ih_l0
         self.b_hh = original_model.rnn.bias_hh_l0
-        #self.W_ih = torch.eye(input_dim,device=device)
-        #self.W_hh = torch.eye(hidden_dim,device=device)
-        #self.b_ih = torch.zeros(original_model.rnn.bias_ih_l0.shape, device=original_model.rnn.bias_ih_l0.device)
-        #self.b_hh = torch.zeros(original_model.rnn.bias_hh_l0.shape, device=original_model.rnn.bias_hh_l0.device)
 
     def forward(self, input_tensor, hidden):
         outputs = []
@@ -475,8 +471,8 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        mode = 'dataset'
-        #mode = 'load'
+        #mode = 'dataset'
+        mode = 'load'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -538,22 +534,120 @@ class LSTM_Dataset(Dataset):
             # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
             #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
     
-        return data_total.cpu(), mask.cpu() 
-
-    def evaluate(data_source):
-        # Turn on evaluation mode which disables dropout.
-        model.eval()
-        total_loss = 0.
-        ntokens = len(corpus.dictionary)
-        hidden = model.init_hidden(eval_batch_size)
-        with torch.no_grad():
-            for i in range(0, data_source.size(0) - 1, args.bptt):
-                data, targets = get_batch(data_source, i, args)
-                output, hidden = model(data, hidden)
-                hidden = repackage_hidden(hidden)
-                total_loss += len(data) * criterion(output, targets).item()
-        return total_loss / (len(data_source) - 1)  
+        return data_total.cpu(), mask.cpu()  
     
+class LSTM_Dataset(Dataset): 
+    def __init__(self, num_samples=1000, seq_len=30, vector_dim=10, num_layers = 1, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
 
+        self.num_samples = num_samples
+        self.seq_len = seq_len
+        self.vector_dim = vector_dim
+        self.num_layers = num_layers
+
+        #TODO: generate the dataset 
+        #load the dataset
+        self.data, self.mask, self.mask_out = self.generate_sequences()
+        print('data size: ', self.data.size())
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return {
+            "inputs": self.data[idx],  # Input sequence
+            "labels": self.data[idx],  # Same as inputs for next-step prediction
+        }   
+    
+    def generate_sequences(self,mode='random'):   
+        # Specify the device as CUDA
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # Load the original model and move it to the device
+        model = torch.load(f'saved_models/LSTM/{self.vector_dim}_{self.num_layers}model.pt', map_location=device)
+        model.to(device)
+
+        # Define the new model
+        input_dim = model.encoder.embedding_dim  # Use the same input dimension as the embedding output
+        hidden_dim = model.rnn.hidden_size
+        nlayers = model.rnn.num_layers
+        seq_len = self.seq_len
+        num_samples = self.num_samples
+        #input_dim = ninp
+        print("Original RNN state_dict:")
+        for param_tensor in model.rnn.state_dict():
+            print(param_tensor, "\t", model.rnn.state_dict()[param_tensor].size())
+
+        #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
+        #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
+        
+        mode = 'dataset'
+        #mode = 'load'
+        batch_size = 20
+
+        def get_batch(source, i, seq_len):
+            seq_len = min(seq_len, len(source) - 1 - i)
+            data = source[i:i+seq_len]
+            target = source[i+1:i+1+seq_len].view(-1)
+
+            print('data', data.size())
+            #raise ValueError('stop here')
+            return data, target
+
+        with torch.no_grad():
+            # Create random inputs with desired shape
+            if mode == 'random': 
+                input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
+                #hidden = (torch.randn(2,num_samples,input_dim, device='cuda'), torch.randn(2,num_samples,input_dim,device='cuda'))
+                # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
+                input_rnn = input_tensor.permute(1, 0, 2).contiguous()
+                data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
+                data_total = data.permute(1, 0, 2).contiguous()
+            if mode == 'dataset':
+                corpus = Corpus('./data/wikitext-2')
+                train_data = batchify(corpus.train, batch_size, device=device)
+                #input_tokens = batchify(corpus.train, batch_size, device) 
+                ntokens = len(corpus.dictionary)
+                hidden = model.init_hidden(batch_size)
+                out = torch.zeros(1, batch_size, input_dim, device=device)
+                data_total = []
+                mask = []
+                mask_out = []
+                if seq_len*num_samples > train_data.size(0):
+                    total_data = train_data.size(0)
+                else: 
+                    total_data = seq_len*num_samples
+                for batch, i in enumerate(range(0, total_data - seq_len - 1, seq_len)):
+                    #if data_batch.size(0) != seq_len*(2*self.num_layers + 2):
+                    #    print('skipping batch: ', batch)
+                    #    continue
+                    input_batch, targets = get_batch(train_data, i, seq_len)
+                    data_batch, mask_batch, mask_out_batch, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
+                    if batch == 0: 
+                        mask = mask_batch
+                        mask_out = mask_out_batch 
+                    data_total.append(data_batch)
+                data_total = torch.cat(data_total, dim=1)
+                data_total = data_total.permute(1, 0, 2).contiguous()
+                if data_total.size(0) > num_samples:
+                    data_total = data_total[:num_samples]
+                else: 
+                    self.num_samples = data_total.size(0)
+                print('data_total.size(): ', data_total.size())
+
+                torch.save(data_total, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt') 
+                torch.save(mask, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
+                torch.save(mask_out, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask_out.pt')
+            if mode == 'load': 
+                data_total = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt')
+                mask = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
+                print('data_total.size(): ', data_total.size())
+                print('mask.size(): ', mask.size())
+            # all_hidden_states is shape (seq_len, batch_size, hidden_dim), permute to (batch_size, seq_len, hidden_dim)
+            #all_hidden_states = all_hidden_states.permute(1, 0, 2).contiguous()
+
+        return data_total.cpu(), mask.cpu(), mask_out.cpu() 
+    
 
 
