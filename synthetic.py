@@ -471,8 +471,8 @@ class LSTM_Dataset(Dataset):
         #all_inputs, all_hidden_states = generate_random_inputs_and_states(new_model, num_samples, int(seq_len/2), input_dim, device=device)
         #data = interweave_inputs_and_hidden_states(all_inputs, all_hidden_states)
         
-        #mode = 'dataset'
-        mode = 'load'
+        mode = 'dataset'
+        #mode = 'load'
         batch_size = 20
 
         def get_batch(source, i, seq_len):
@@ -503,8 +503,6 @@ class LSTM_Dataset(Dataset):
                 #hidden = (torch.randn(2,batch_size,input_dim, device='cuda'), torch.randn(2,batch_size,input_dim,device='cuda'))
                 data_total = []
                 mask = []
-                #train_data.size(0) - 1
-                #max_batches = int(num_samples/batch_size) 
                 for batch, i in enumerate(range(0, train_data.size(0) - 1, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
                     data_batch, mask_batch, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
@@ -527,6 +525,7 @@ class LSTM_Dataset(Dataset):
                 torch.save(data_total, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt') 
                 torch.save(mask, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
             if mode == 'load': 
+                raise ValueError('Not implemented yet')
                 data_total = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt')
                 mask = torch.load(f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
                 print('data_total.size(): ', data_total.size())

@@ -244,7 +244,7 @@ if __name__ == "__main__":
     # 1. Synthetic dataset
     #parse args
     parser = argparse.ArgumentParser(description='training a GPT model on synthetic data')
-    parser.add_argument('--data', type=str, default='RNN',
+    parser.add_argument('--data', type=str, default='LSTM',
                     help='options are [random, rotation, LDS, RNN_TANH, RNN]')
     parser.add_argument('--input_dim', type=int, default=100,
                     help='integer input dimension')
@@ -252,7 +252,7 @@ if __name__ == "__main__":
                     help='number of sequences each of seq_len')
     parser.add_argument('--seq_len', type=int, default=2,
                     help='length of each sequence')
-    parser.add_argument('--num_layers', type=int, default=1,
+    parser.add_argument('--num_layers', type=int, default=2,
                     help='number of layers in data generating model')
     parser.add_argument('--model_emb', type=int, default=768,
                     help='dimension of embedding in transformer model')
