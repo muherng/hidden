@@ -116,11 +116,16 @@ class VectorGPTModel(PreTrainedModel):
 # ----------------------------------------------------
 class VectorGPTTrainer(Trainer):
     
-    def __init__(self, *args, mask=None, **kwargs):
+    def __init__(self, *args, mask=None,mask_out=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.mask = mask
+        self.mask_out = mask_out
         self.print_interval = 1000
-
+        # Load the original model and move it to the device
+        #model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
+        #model_tgt.to(device)
+        #self.model_tgt = model
+        
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
@@ -285,6 +290,7 @@ if __name__ == "__main__":
     print('number of samples in dataset: ', len(dataset.data))
     print('datapoint shape: ', dataset.data[0].shape)
     print('mask: ', dataset.mask)
+    print('mask_out: ', dataset.mask_out)   
 
     # Train/Validation/Test split
     valid_size = min(int(0.15 * len(dataset)), 100)
@@ -303,9 +309,9 @@ if __name__ == "__main__":
         n_layer=model_layers,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
-        #embd_pdrop=0.0,
-        #resid_pdrop=0.0,
-        #attn_pdrop=0.0
+        embd_pdrop=0.0,
+        resid_pdrop=0.0,
+        attn_pdrop=0.0
     )
     model = VectorGPTModel(config)
  
@@ -328,8 +334,8 @@ if __name__ == "__main__":
         load_best_model_at_end=True,       # Load the best model based on validation loss
         metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
         greater_is_better=False,           # Lower loss is better
-        learning_rate=3e-4,                # Lower learning rate for stability 3e-4 original setting
-        weight_decay=0.01,                 # Weight decay for regularization
+        learning_rate=1e-5,                # Lower learning rate for stability 3e-4 original setting
+        weight_decay=0.0,                 # Weight decay for regularization original 0.01
         adam_beta1=0.9,                    # First momentum parameter
         adam_beta2=0.98,                   # Second momentum parameter
         adam_epsilon=1e-6,                 # Epsilon for numerical stability
@@ -424,27 +430,4 @@ if __name__ == "__main__":
     # Evaluate on test dataset
     test_results = trainer.evaluate(test_dataset)
     print("Test Results:", test_results)
-
-"""     # Load the JSON file
-    with open(f"./results/output_{args.input_dim}_{args.num_layers}losses.json", "r") as f:
-        losses = json.load(f)
-
-    # Extract training and validation losses
-    training_loss = losses.get("training_loss", [])
-    validation_loss = losses.get("validation_loss", [])
-
-    # Plot the losses
-    plt.figure(figsize=(10, 6))
-    plt.plot(training_loss, label="Training Loss", marker="o")
-    if validation_loss:  # Only plot if validation loss exists
-        plt.plot(validation_loss, label="Validation Loss", marker="x")
-        
-    # Add labels and title
-    plt.xlabel("Steps")
-    plt.ylabel("Loss")
-    plt.title("Training and Validation Loss MSE ")
-    plt.legend()
-    plt.grid(True)
-
-    plt.savefig(f'./plots/output_{args.input_dim}_{args.num_layers}loss_plot.png') """
 
