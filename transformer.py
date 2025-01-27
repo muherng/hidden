@@ -40,6 +40,7 @@ class VectorGPTConfig(GPT2Config):
                  n_layer=4,      # number of transformer layers
                  n_head=4,       # number of attention heads
                  input_dim=10,   # input vector dimension
+                 ntokens=1,      # number of tokens
                  **kwargs):
         super().__init__(vocab_size=vocab_size,
                          n_positions=n_positions,
@@ -48,6 +49,7 @@ class VectorGPTConfig(GPT2Config):
                          n_head=n_head,
                          **kwargs)
         self.input_dim = input_dim
+        self.ntokens = ntokens
 
 
 class VectorGPTModel(PreTrainedModel):
@@ -63,6 +65,7 @@ class VectorGPTModel(PreTrainedModel):
         super().__init__(config)
         self.input_dim = config.input_dim
         self.hidden_dim = config.n_embd
+        self.ntokens = config.ntokens
         
         # 1. Input embedding: map 200 -> hidden_dim
         self.input_embedding = nn.Linear(self.input_dim, self.hidden_dim)
@@ -78,6 +81,8 @@ class VectorGPTModel(PreTrainedModel):
         
         # 5. Output projection: hidden_dim -> 200
         self.output_projection = nn.Linear(self.hidden_dim, self.input_dim)
+
+        self.decoder = nn.Linear(self.input_dim, self.ntokens)
         
         self.post_init()  # HF utility to initialize weights
 
@@ -116,15 +121,15 @@ class VectorGPTModel(PreTrainedModel):
 # ----------------------------------------------------
 class VectorGPTTrainer(Trainer):
     
-    def __init__(self, *args, mask=None,mask_out=None, **kwargs):
+    def __init__(self, *args, custom_args=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.mask = mask
-        self.mask_out = mask_out
-        self.print_interval = 1000
+        self.mask = custom_args['mask']
+        self.mask_out = custom_args['mask_out']
+        self.print_interval = 100
         # Load the original model and move it to the device
-        #model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
-        #model_tgt.to(device)
-        #self.model_tgt = model
+        model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
+        model_tgt.to(device)
+        self.model_tgt = model
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -133,7 +138,8 @@ class VectorGPTTrainer(Trainer):
         labels = inputs.pop("labels", None)
         outputs = model(**inputs)  # Forward pass without labels
         mask = self.mask
-        
+        mask_out = self.mask_out
+        #print('mask_out: ', mask_out)
         # Extract the logits
         logits = outputs.logits  # (bsz, seq_len, vocab_size)
         
@@ -159,36 +165,47 @@ class VectorGPTTrainer(Trainer):
             
             #mask = torch.zeros(labels.size(1) - 1, dtype=torch.bool)
             mask = mask.bool()
-            pred = pred[:,mask,:]
-            tgt = tgt[:,mask,:]   
+            pred_mask = pred[:,mask,:]
+            tgt_mask = tgt[:,mask,:]   
 
             huber_fn = nn.HuberLoss(reduction="none")
-            loss = huber_fn(pred, tgt)
+            loss = huber_fn(pred_mask, tgt_mask)
+            loss = loss.mean()
 
+            mask_out = mask_out.bool()
+            out_tgt = self.model_tgt.decoder(tgt)
+            out_pred = model.decoder(pred)
+            out_tgt_masked = out_tgt[:,mask_out,:]
+            out_pred_masked = out_pred[:,mask_out,:]
+            additional_loss = huber_fn(out_pred_masked, out_tgt_masked)
             # Print the coordinates with the largest loss intermittently
             if self.state.global_step % self.print_interval == 0:
-                print('mask size: ', mask.size())
-                print('mask: ', mask)
-                #print('logits size: ', logits.size())
-                print('pred size: ', pred.size())
-                print('tgt size: ', tgt.size())
-                print('loss size: ', loss.size())
-                print('loss[0,:,0]', loss[0,:,0])
-                #print('pred_copy size: ', pred_copy.size())
-                #print('pred_copy: ', pred_copy[0,:,0])
-                print('pred: ', pred[0,:,0])
-                #tgt_check = inputs['inputs'][0,1:,0]
-                #tgt_check = tgt_check[mask]
-                #print('inputs: ', tgt_check)
-                print('tgt: ', tgt[0,:,0])
-                max_loss, max_indices = torch.max(loss[0,:,0],dim=0)
-                print(f"Step {self.state.global_step}: Max Huber loss coordinates: {max_indices}, values: {max_loss}")
+                print("out size: ", out_pred_masked.size())
+                print("tgt size: ", out_tgt_masked.size())
+                print("additional loss size: ", additional_loss.size())
+                #print("tgt ")
+                values, indices = torch.topk(out_tgt_masked[0,0,:], k=10, dim=0)
+                print("Top k tgt values:")
+                print(values)
+                #print("Indices:")
+                #print(indices)
+                # Original tensors
+                #indices = torch.tensor([[0, 2], [1, 0]])  # Indices to gather values
+
+                # Use gather to retrieve values at specified indices along a dimension
+                values = torch.gather(out_pred_masked[0,0,:], dim=0, index=indices)
+                #print("Indices:")
+                #print(indices)
+                print("Values of Pred at top k indices:")
+                print(values)
                  # Print the inputs dictionary
                 #print('inputs:')
                 #for key, value in inputs.items():
                 #    print(f"{key}")
                 #print(f"Step {self.state.global_step}: Max Huber loss coordinates: {max_indices}")
-            loss = loss.mean()
+            regular = 0.5
+            loss = (1-regular)*loss + regular*additional_loss.mean()
+            #loss = additional_loss.mean()
         else:
             loss = None
 
@@ -250,7 +267,7 @@ if __name__ == "__main__":
                     help='integer input dimension')
     parser.add_argument('--num_samples', type=int, default=10000,
                     help='number of sequences each of seq_len')
-    parser.add_argument('--seq_len', type=int, default=2,
+    parser.add_argument('--seq_len', type=int, default=4,
                     help='length of each sequence')
     parser.add_argument('--num_layers', type=int, default=2,
                     help='number of layers in data generating model')
@@ -311,7 +328,8 @@ if __name__ == "__main__":
         input_dim=input_dim,  # input vector dimension
         embd_pdrop=0.0,
         resid_pdrop=0.0,
-        attn_pdrop=0.0
+        attn_pdrop=0.0,
+        ntokens = dataset.ntokens
     )
     model = VectorGPTModel(config)
  
@@ -326,15 +344,15 @@ if __name__ == "__main__":
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=False,         # Overwrite existing output dir
         eval_strategy="steps",             # Evaluate at the end of each epoch
-        eval_steps=10,                    # Evaluate every 100 steps
+        eval_steps=100,                    # Evaluate every 100 steps
         save_strategy="steps",             # Save checkpoints every epoch
         logging_dir="./logs",              # Directory for TensorBoard logs
-        logging_steps=10,                  # Log every 10 steps for finer feedback
+        logging_steps=100,                  # Log every 10 steps for finer feedback
         save_total_limit=3,                # Keep only the last 3 checkpoints
         load_best_model_at_end=True,       # Load the best model based on validation loss
         metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
         greater_is_better=False,           # Lower loss is better
-        learning_rate=1e-5,                # Lower learning rate for stability 3e-4 original setting
+        learning_rate=3e-4,                # Lower learning rate for stability 3e-4 original setting
         weight_decay=0.0,                 # Weight decay for regularization original 0.01
         adam_beta1=0.9,                    # First momentum parameter
         adam_beta2=0.98,                   # Second momentum parameter
@@ -351,6 +369,7 @@ if __name__ == "__main__":
     )
 
 
+    custom_args = {'mask': dataset.mask, 'mask_out': dataset.mask_out, 'ntokens': dataset.ntokens}
     # 4. Custom trainer
     trainer = VectorGPTTrainer(
         model=model,
@@ -358,7 +377,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         tokenizer=None,  # Not needed for vector-based tasks
-        mask=dataset.mask #mask out input tokens to predict hidden state
+        custom_args = custom_args
     )
 
     import json
