@@ -449,7 +449,7 @@ class LSTM_Dataset(Dataset):
             "labels": self.data[idx],  # Same as inputs for next-step prediction
         }   
     
-    def generate_sequences(self,mode='random'):   
+    def generate_sequences(self,mode='dataset'):   
         # Specify the device as CUDA
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -480,7 +480,7 @@ class LSTM_Dataset(Dataset):
             data = source[i:i+seq_len]
             target = source[i+1:i+1+seq_len].view(-1)
 
-            print('data', data.size())
+            #print('data', data.size())
             #raise ValueError('stop here')
             return data, target
 
@@ -502,11 +502,14 @@ class LSTM_Dataset(Dataset):
                 ntokens = len(corpus.dictionary)
                 hidden = model.init_hidden(batch_size)
                 out = torch.zeros(1, batch_size, input_dim, device=device)
-                #hidden = (torch.randn(2,batch_size,input_dim, device='cuda'), torch.randn(2,batch_size,input_dim,device='cuda'))
                 data_total = []
+                token_data = []
                 mask = []
                 mask_out = []
-                max_data = min(seq_len*num_samples, (int(train_data.size(0)/seq_len) - 1)*seq_len) 
+                max_data = train_data.size(0)
+                print('train_data.size(): ', train_data.size()) 
+                print('max_data: ', max_data)
+                raise ValueError('stop here')
                 for batch, i in enumerate(range(0, max_data, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
                     data_batch, mask_batch, mask_out, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
@@ -516,14 +519,23 @@ class LSTM_Dataset(Dataset):
                         mask = mask_batch 
                         mask_out = mask_out
                     data_total.append(data_batch)
+                    token_data.append(input_batch)
+                    print('data_batch.size():', data_batch.size())
                     #raise ValueError('Not implemented yet')
                     #output, hidden = model(data, hidden)
                 data_total = torch.cat(data_total, dim=1)
                 data_total = data_total.permute(1, 0, 2).contiguous()
                 if data_total.size(0) > num_samples:
+                    print('data_total.size() before', data_total.size())
                     data_total = data_total[:num_samples]
                 else: 
                     self.num_samples = data_total.size(0)
+                token_data = torch.cat(token_data, dim=1)
+                token_data = token_data.permute(1, 0).contiguous()
+                print('data_total.size()', data_total.size())
+                print('train_data.size()', train_data.size())
+                print("token_data.size()", token_data.size())
+                raise ValueError('Not implemented yet')
                 #print('data_total.size(): ', data_total.size())
                 torch.save(data_total, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt') 
                 torch.save(mask, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
