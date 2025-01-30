@@ -17,6 +17,8 @@ import argparse
 import os
 
 import datetime
+import numpy as np
+from helper import evaluate
 
 # Generate a unique timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -125,7 +127,7 @@ class VectorGPTTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.mask = custom_args['mask']
         self.mask_out = custom_args['mask_out']
-        self.print_interval = 100
+        self.print_interval = 1000
         # Load the original model and move it to the device
         model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
         model_tgt.to(device)
@@ -135,6 +137,7 @@ class VectorGPTTrainer(Trainer):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
         """
+        inputs_copy = inputs.copy()
         labels = inputs.pop("labels", None)
         outputs = model(**inputs)  # Forward pass without labels
         mask = self.mask
@@ -163,7 +166,6 @@ class VectorGPTTrainer(Trainer):
             #create a copy of prediction before masking 
             pred_copy = pred.clone()
             
-            #mask = torch.zeros(labels.size(1) - 1, dtype=torch.bool)
             mask = mask.bool()
             pred_mask = pred[:,mask,:]
             tgt_mask = tgt[:,mask,:]   
@@ -180,32 +182,11 @@ class VectorGPTTrainer(Trainer):
             additional_loss = huber_fn(out_pred_masked, out_tgt_masked)
             # Print the coordinates with the largest loss intermittently
             if self.state.global_step % self.print_interval == 0:
-                print("out size: ", out_pred_masked.size())
-                print("tgt size: ", out_tgt_masked.size())
-                print("additional loss size: ", additional_loss.size())
-                #print("tgt ")
-                values, indices = torch.topk(out_tgt_masked[0,0,:], k=10, dim=0)
-                print("Top k tgt values:")
-                print(values)
-                #print("Indices:")
-                #print(indices)
-                # Original tensors
-                #indices = torch.tensor([[0, 2], [1, 0]])  # Indices to gather values
-
-                # Use gather to retrieve values at specified indices along a dimension
-                values = torch.gather(out_pred_masked[0,0,:], dim=0, index=indices)
-                #print("Indices:")
-                #print(indices)
-                print("Values of Pred at top k indices:")
-                print(values)
-                 # Print the inputs dictionary
-                #print('inputs:')
-                #for key, value in inputs.items():
-                #    print(f"{key}")
-                #print(f"Step {self.state.global_step}: Max Huber loss coordinates: {max_indices}")
+                with torch.no_grad(): 
+                    eval_loss = self.eval_loss(model,inputs_copy)
+                    print('Logits Loss: ', eval_loss)
             regular = 0.5
             loss = (1-regular)*loss + regular*additional_loss.mean()
-            #loss = additional_loss.mean()
         else:
             loss = None
 
@@ -253,6 +234,95 @@ class VectorGPTTrainer(Trainer):
                 num_training_steps=num_training_steps,
             )
         return self.lr_scheduler
+
+    def eval_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Custom loss computation: Ensure a scalar tensor is returned for loss.
+        """
+
+        labels = inputs.pop("labels", None)
+        mask = self.mask
+        mask_out = self.mask_out
+        # Extract the logits
+        #logits = outputs.logits  # (bsz, seq_len, vocab_size)
+        #TODO: make this unbelievably clear 
+        mask_original = torch.tensor([False] + mask.tolist()).bool() #mask unshifted by one 
+        
+        if labels is not None:
+            #ensure mask is of the right length for the labels shifted by one
+            mask = mask[:labels.size(1)-1].bool()
+            mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
+            
+            mask_idx = torch.where(mask_original)[0]
+            if len(mask_idx) > 0: 
+                context_len = mask_idx[0].item()
+            else: 
+                raise ValueError('No context length found')
+            
+            generated = inputs['inputs'][:,:context_len,:]
+            #generated = sliced_inputs.clone()  # Forward pass without labels
+
+            # Iteratively generate the next tokens
+            #resulting tensor is of len labels.size(1) + 1
+            #example: context length is 4, label size is 10, generated size is 11
+            #we ignore the first token in the generated tensor 
+            #later we will also ignore the last token in the generated tensor
+            for index in range(labels.size(1)+1):
+                #print('index: ', index)
+                #print('generated size: ', generated.size())
+                if index < context_len: 
+                    continue
+                #if last token is reached or mask is true, generate next token 
+                if index == labels.size(1) or mask_original[index]: 
+                    logits = self.model(generated).logits  # your model forward
+                    next_token = logits[:, -1:, :]  # get the most recent token
+                    generated = torch.cat((generated, next_token), dim=1)  # append the next token
+                else: 
+                    generated = torch.cat((generated, labels[:,index,:].unsqueeze(1)), dim=1)
+            
+            #ignore first token 
+            generated = generated[:,1:,:]   
+            
+            # Apply the mask to predictions and labels
+            pred = generated[:, :-1, :]  # (bsz, seq_len, vocab_size)
+            tgt = labels[:, 1:, :]  # (bsz, seq_len, vocab_size)
+            #create a copy of prediction before masking 
+            pred_copy = pred.clone()
+            
+            #mask = torch.zeros(labels.size(1) - 1, dtype=torch.bool)
+            mask = mask.bool()
+            pred_mask = pred[:,mask,:]
+            tgt_mask = tgt[:,mask,:]   
+
+            huber_fn = nn.HuberLoss(reduction="none")
+            loss = huber_fn(pred_mask, tgt_mask)
+            loss = loss.mean()
+
+            mask_out = mask_out.bool()
+            out_tgt = self.model_tgt.decoder(tgt)
+            out_pred = model.decoder(pred)
+            out_tgt_masked = out_tgt[:,mask_out,:]
+            out_pred_masked = out_pred[:,mask_out,:]
+            additional_loss = huber_fn(out_pred_masked, out_tgt_masked)
+
+            # Print the 10 largest values in out_tgt_masked and their coordinates
+            values, indices = torch.topk(out_tgt_masked.view(-1), 10)
+            coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
+
+            print("Top 10 coordinates in out_tgt_masked and corresponding out_pred_masked values:")
+            for i, val in enumerate(values):
+                b, p, d = coords[0][i], coords[1][i], coords[2][i]
+                print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
+            
+            regular = 1.0
+            loss = (1-regular)*loss + regular*additional_loss.mean() 
+        else:
+            loss = None
+
+        if return_outputs:
+            return loss, pred  # Return both loss and outputs if requested
+        else:
+            return loss  # Return only the scalar loss
 
 # ----------------------------------------------------
 # 2. Training Script
