@@ -123,15 +123,22 @@ class VectorGPTModel(PreTrainedModel):
 # ----------------------------------------------------
 class VectorGPTTrainer(Trainer):
     
-    def __init__(self, *args, custom_args=None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, train_loader=None, custom_args=None, **kwargs):
         self.mask = custom_args['mask']
         self.mask_out = custom_args['mask_out']
         self.print_interval = 1000
+        self.train_loader = train_loader
         # Load the original model and move it to the device
         model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
         model_tgt.to(device)
         self.model_tgt = model
+        super().__init__(*args, **kwargs)
+    
+    def get_train_dataloader(self):
+        """
+        Returns the custom DataLoader for training.
+        """
+        return self.train_loader
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -139,6 +146,8 @@ class VectorGPTTrainer(Trainer):
         """
         inputs_copy = inputs.copy()
         labels = inputs.pop("labels", None)
+        tokens = inputs.pop("tokens", None)
+        #tokens = inputs.pop("tokens")
         outputs = model(**inputs)  # Forward pass without labels
         mask = self.mask
         mask_out = self.mask_out
@@ -241,6 +250,9 @@ class VectorGPTTrainer(Trainer):
         """
 
         labels = inputs.pop("labels", None)
+        #tokens = inputs.pop("tokens")
+        #print('tokens: ', tokens)
+        #raise ValueError('stop here')
         mask = self.mask
         mask_out = self.mask_out
         # Extract the logits
@@ -385,10 +397,38 @@ if __name__ == "__main__":
     train_size = len(dataset) - valid_size - test_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
+    
+    # Define a custom collate function
+    def collate_fn(batch):
+        inputs = torch.stack([item["inputs"] for item in batch])
+        labels = torch.stack([item["labels"] for item in batch])
+        tokens = [item["tokens"] for item in batch]  # or torch.stack(...) if they are tensors
+        
+        return {
+            "inputs": inputs,
+            "labels": labels,
+            "tokens": tokens
+        }
+
+    # Create a DataLoader for the train_dataset
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=32,
+        shuffle=True,
+        pin_memory=True,
+        collate_fn=collate_fn
+    )
+
+    # Iterating over the DataLoader
+    for batch in train_loader:
+        inputs = batch["inputs"]
+        labels = batch["labels"]
+        tokens = batch["tokens"]
+        print('tokens: ', tokens)
     # DataLoader
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=32, shuffle=False, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
+    #train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
+    #valid_loader = DataLoader(valid_dataset, batch_size=32, shuffle=False, pin_memory=True)
+    #test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
         n_positions=2000,  # must be >= 30 (seq_len)
@@ -447,7 +487,8 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         tokenizer=None,  # Not needed for vector-based tasks
-        custom_args = custom_args
+        custom_args = custom_args,
+        train_loader = train_loader
     )
 
     import json

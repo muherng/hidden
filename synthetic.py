@@ -436,7 +436,7 @@ class LSTM_Dataset(Dataset):
 
         #TODO: generate the dataset 
         #load the dataset
-        self.data, self.mask, self.mask_out, self.ntokens = self.generate_sequences()
+        self.data, self.mask, self.mask_out, self.token_data, self.ntokens = self.generate_sequences()
         print('ntokens: ', self.ntokens)
 
 
@@ -447,6 +447,7 @@ class LSTM_Dataset(Dataset):
         return {
             "inputs": self.data[idx],  # Input sequence
             "labels": self.data[idx],  # Same as inputs for next-step prediction
+            "tokens": self.token_data[idx]
         }   
     
     def generate_sequences(self,mode='dataset'):   
@@ -488,7 +489,6 @@ class LSTM_Dataset(Dataset):
             # Create random inputs with desired shape
             if mode == 'random': 
                 input_tensor = torch.randn(num_samples, seq_len, input_dim, device=device)
-                #hidden = (torch.randn(2,num_samples,input_dim, device='cuda'), torch.randn(2,num_samples,input_dim,device='cuda'))
                 # Permute to match the torch RNN input format (seq_len, num_samples, input_dim)
                 input_rnn = input_tensor.permute(1, 0, 2).contiguous()
                 data, mask = model.collect_hidden_states_LSTM(input_rnn, model.init_hidden(num_samples))
@@ -498,6 +498,7 @@ class LSTM_Dataset(Dataset):
                 ntokens = len(corpus.dictionary)
                 print('ntokens: ', ntokens)
                 train_data = batchify(corpus.train, batch_size, device=device)
+                total_tokens = train_data.size(0) * train_data.size(1)
                 #input_tokens = batchify(corpus.train, batch_size, device) 
                 ntokens = len(corpus.dictionary)
                 hidden = model.init_hidden(batch_size)
@@ -506,10 +507,10 @@ class LSTM_Dataset(Dataset):
                 token_data = []
                 mask = []
                 mask_out = []
-                max_data = train_data.size(0)
+                #max_data = int(total_tokens/(batch_size*seq_len))
+                max_data = min(int(self.num_samples*seq_len/batch_size), train_data.size(0))
                 print('train_data.size(): ', train_data.size()) 
                 print('max_data: ', max_data)
-                raise ValueError('stop here')
                 for batch, i in enumerate(range(0, max_data, seq_len)):
                     input_batch, targets = get_batch(train_data, i, seq_len)
                     data_batch, mask_batch, mask_out, hidden, out = model.collect_hidden_from_tokens(hidden,out,input_batch)
@@ -520,9 +521,6 @@ class LSTM_Dataset(Dataset):
                         mask_out = mask_out
                     data_total.append(data_batch)
                     token_data.append(input_batch)
-                    print('data_batch.size():', data_batch.size())
-                    #raise ValueError('Not implemented yet')
-                    #output, hidden = model(data, hidden)
                 data_total = torch.cat(data_total, dim=1)
                 data_total = data_total.permute(1, 0, 2).contiguous()
                 if data_total.size(0) > num_samples:
@@ -535,7 +533,7 @@ class LSTM_Dataset(Dataset):
                 print('data_total.size()', data_total.size())
                 print('train_data.size()', train_data.size())
                 print("token_data.size()", token_data.size())
-                raise ValueError('Not implemented yet')
+                #raise ValueError('Not implemented yet')
                 #print('data_total.size(): ', data_total.size())
                 torch.save(data_total, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}data.pt') 
                 torch.save(mask, f'hidden_states/LSTM_{input_dim}_{self.num_layers}_{self.seq_len}mask.pt')
@@ -546,4 +544,4 @@ class LSTM_Dataset(Dataset):
                 print('data_total.size(): ', data_total.size())
                 print('mask.size(): ', mask.size())
     
-        return data_total.cpu(), mask.cpu(), mask_out.cpu(), ntokens  
+        return data_total.cpu(), mask.cpu(), mask_out.cpu(), token_data.cpu(), ntokens  
