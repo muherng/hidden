@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import random_split, Dataset, DataLoader
 from transformers import PreTrainedModel, GPT2Config
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
@@ -18,7 +19,7 @@ import os
 
 import datetime
 import numpy as np
-from helper import evaluate
+from helper import evaluate, kl_loss
 
 # Generate a unique timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -126,6 +127,7 @@ class VectorGPTTrainer(Trainer):
     def __init__(self, *args, train_loader=None, custom_args=None, **kwargs):
         self.mask = custom_args['mask']
         self.mask_out = custom_args['mask_out']
+        self.ntoken = custom_args['ntoken']
         self.print_interval = 1000
         self.train_loader = train_loader
         # Load the original model and move it to the device
@@ -147,11 +149,9 @@ class VectorGPTTrainer(Trainer):
         inputs_copy = inputs.copy()
         labels = inputs.pop("labels", None)
         tokens = inputs.pop("tokens", None)
-        #tokens = inputs.pop("tokens")
         outputs = model(**inputs)  # Forward pass without labels
         mask = self.mask
         mask_out = self.mask_out
-        #print('mask_out: ', mask_out)
         # Extract the logits
         logits = outputs.logits  # (bsz, seq_len, vocab_size)
         
@@ -186,16 +186,20 @@ class VectorGPTTrainer(Trainer):
             mask_out = mask_out.bool()
             out_tgt = self.model_tgt.decoder(tgt)
             out_pred = model.decoder(pred)
+            
+            #mask out the input embeddings
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
-            additional_loss = huber_fn(out_pred_masked, out_tgt_masked)
+            kl = kl_loss(out_pred_masked, out_tgt_masked)
+            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
             # Print the coordinates with the largest loss intermittently
             if self.state.global_step % self.print_interval == 0:
+                print("kl loss: ", kl)
                 with torch.no_grad(): 
                     eval_loss = self.eval_loss(model,inputs_copy)
-                    print('Logits Loss: ', eval_loss)
+                    print('Evaluation Loss: ', eval_loss)
             regular = 0.5
-            loss = (1-regular)*loss + regular*additional_loss.mean()
+            loss = (1-regular)*loss + regular*kl
         else:
             loss = None
 
@@ -315,7 +319,8 @@ class VectorGPTTrainer(Trainer):
             out_pred = model.decoder(pred)
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
-            additional_loss = huber_fn(out_pred_masked, out_tgt_masked)
+            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
+            kl = kl_loss(out_pred_masked, out_tgt_masked)
 
             # Print the 10 largest values in out_tgt_masked and their coordinates
             values, indices = torch.topk(out_tgt_masked.view(-1), 10)
@@ -326,15 +331,18 @@ class VectorGPTTrainer(Trainer):
                 b, p, d = coords[0][i], coords[1][i], coords[2][i]
                 print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
             
-            regular = 1.0
-            loss = (1-regular)*loss + regular*additional_loss.mean() 
+            print('kl loss: ', kl)
+            print('huber loss: ', loss) 
+            
+            regular = 0.5
+            loss_final = (1-regular)*loss + regular*kl
         else:
-            loss = None
+            loss_final = None
 
         if return_outputs:
-            return loss, pred  # Return both loss and outputs if requested
+            return loss_final, pred  # Return both loss and outputs if requested
         else:
-            return loss  # Return only the scalar loss
+            return loss_final  # Return only the scalar loss
 
 # ----------------------------------------------------
 # 2. Training Script
@@ -420,11 +428,11 @@ if __name__ == "__main__":
     )
 
     # Iterating over the DataLoader
-    for batch in train_loader:
-        inputs = batch["inputs"]
-        labels = batch["labels"]
-        tokens = batch["tokens"]
-        print('tokens: ', tokens)
+    #for batch in train_loader:
+    #    inputs = batch["inputs"]
+    #    labels = batch["labels"]
+    #    tokens = batch["tokens"]
+        #print('tokens: ', tokens)
     # DataLoader
     #train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
     #valid_loader = DataLoader(valid_dataset, batch_size=32, shuffle=False, pin_memory=True)
@@ -439,7 +447,7 @@ if __name__ == "__main__":
         embd_pdrop=0.0,
         resid_pdrop=0.0,
         attn_pdrop=0.0,
-        ntokens = dataset.ntokens
+        ntokens = dataset.ntoken
     )
     model = VectorGPTModel(config)
  
@@ -479,7 +487,7 @@ if __name__ == "__main__":
     )
 
 
-    custom_args = {'mask': dataset.mask, 'mask_out': dataset.mask_out, 'ntokens': dataset.ntokens}
+    custom_args = {'mask': dataset.mask, 'mask_out': dataset.mask_out, 'ntoken': dataset.ntoken}
     # 4. Custom trainer
     trainer = VectorGPTTrainer(
         model=model,
