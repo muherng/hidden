@@ -436,8 +436,8 @@ class LSTM_Dataset(Dataset):
 
         #TODO: generate the dataset 
         #load the dataset
-        self.data, self.mask, self.mask_out, self.token_data, self.ntokens = self.generate_sequences()
-        print('ntokens: ', self.ntokens)
+        self.data, self.mask, self.mask_out, self.token_data, self.ntoken = self.generate_sequences()
+        print('ntokens: ', self.ntoken)
 
 
     def __len__(self):
@@ -495,12 +495,11 @@ class LSTM_Dataset(Dataset):
                 data_total = data.permute(1, 0, 2).contiguous()
             if mode == 'dataset':
                 corpus = Corpus('./data/wikitext-2')
-                ntokens = len(corpus.dictionary)
-                print('ntokens: ', ntokens)
+                ntoken = len(corpus.dictionary)
+                print('ntoken: ', ntoken)
                 train_data = batchify(corpus.train, batch_size, device=device)
                 total_tokens = train_data.size(0) * train_data.size(1)
                 #input_tokens = batchify(corpus.train, batch_size, device) 
-                ntokens = len(corpus.dictionary)
                 hidden = model.init_hidden(batch_size)
                 out = torch.zeros(1, batch_size, input_dim, device=device)
                 data_total = []
@@ -544,4 +543,4 @@ class LSTM_Dataset(Dataset):
                 print('data_total.size(): ', data_total.size())
                 print('mask.size(): ', mask.size())
     
-        return data_total.cpu(), mask.cpu(), mask_out.cpu(), token_data.cpu(), ntokens  
+        return data_total.cpu(), mask.cpu(), mask_out.cpu(), token_data.cpu(), ntoken  
