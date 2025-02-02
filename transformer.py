@@ -165,9 +165,7 @@ class VectorGPTTrainer(Trainer):
             #ensure mask is of the right length for the labels shifted by one
             mask = mask[:labels.size(1)-1].bool()
             mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
-            
-            #print('mask size: ', mask.size())
-            #print('mask:', mask)
+        
             
             # Apply the mask to predictions and labels
             pred = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
@@ -191,15 +189,15 @@ class VectorGPTTrainer(Trainer):
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
             kl = kl_loss(out_pred_masked, out_tgt_masked)
-            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
-            # Print the coordinates with the largest loss intermittently
-            if self.state.global_step % self.print_interval == 0:
-                print("kl loss: ", kl)
-                with torch.no_grad(): 
-                    eval_loss = self.eval_loss(model,inputs_copy)
-                    print('Evaluation Loss: ', eval_loss)
             regular = 0.5
             loss = (1-regular)*loss + regular*kl
+            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
+            # Print the coordinates with the largest loss intermittently
+            #if False and self.state.global_step % self.print_interval == 0:
+            #    print("kl loss: ", kl)
+            #    with torch.no_grad(): 
+            #        eval_loss = self.eval_loss(model,inputs_copy)
+            #        print('Evaluation Loss: ', eval_loss)
         else:
             loss = None
 
@@ -247,6 +245,23 @@ class VectorGPTTrainer(Trainer):
                 num_training_steps=num_training_steps,
             )
         return self.lr_scheduler
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        """
+        Overrides evaluate to always compute evaluation loss using eval_loss.
+        """
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+        total_loss = 0.0
+        nb_steps = 0
+        self.model.eval()
+        for batch in eval_dataloader:
+            with torch.no_grad():
+                loss = self.eval_loss(self.model, batch)
+                total_loss += loss.item()
+            nb_steps += 1
+        mean_loss = total_loss / nb_steps if nb_steps > 0 else float("inf")
+        print("Evaluation Loss:", mean_loss)
+        return {f"{metric_key_prefix}_loss": mean_loss}
 
     def eval_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -421,6 +436,14 @@ if __name__ == "__main__":
     # Create a DataLoader for the train_dataset
     train_loader = DataLoader(
         train_dataset,
+        batch_size=32,
+        shuffle=True,
+        pin_memory=True,
+        collate_fn=collate_fn
+    )
+
+    valid_loader = DataLoader(
+        valid_dataset,
         batch_size=32,
         shuffle=True,
         pin_memory=True,
