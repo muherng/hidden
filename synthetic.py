@@ -437,7 +437,6 @@ class LSTM_Dataset(Dataset):
         #TODO: generate the dataset 
         #load the dataset
         self.data, self.mask, self.mask_out, self.token_data, self.ntoken = self.generate_sequences()
-        print('ntokens: ', self.ntoken)
 
 
     def __len__(self):

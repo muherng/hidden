@@ -124,12 +124,13 @@ class VectorGPTModel(PreTrainedModel):
 # ----------------------------------------------------
 class VectorGPTTrainer(Trainer):
     
-    def __init__(self, *args, train_loader=None, custom_args=None, **kwargs):
+    def __init__(self, *args, train_loader=None, valid_loader=None, custom_args=None, **kwargs):
         self.mask = custom_args['mask']
         self.mask_out = custom_args['mask_out']
         self.ntoken = custom_args['ntoken']
         self.print_interval = 1000
         self.train_loader = train_loader
+        self.valid_loader = valid_loader
         # Load the original model and move it to the device
         model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
         model_tgt.to(device)
@@ -141,6 +142,16 @@ class VectorGPTTrainer(Trainer):
         Returns the custom DataLoader for training.
         """
         return self.train_loader
+    
+    def get_eval_dataloader(self, eval_dataset=None):
+        """
+        Returns the custom DataLoader for evaluation if provided,
+        otherwise fall back to the default behavior.
+        """
+        if self.valid_loader is not None:
+            return self.valid_loader
+        else:
+            return super().get_eval_dataloader(eval_dataset)
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -268,9 +279,10 @@ class VectorGPTTrainer(Trainer):
         Custom loss computation: Ensure a scalar tensor is returned for loss.
         """
 
-        labels = inputs.pop("labels", None)
-        #tokens = inputs.pop("tokens")
-        #print('tokens: ', tokens)
+        labels = inputs.pop("labels", None).to(device)
+        tokens = inputs.pop("tokens").to(device)
+        print('labels: ', labels.shape)
+        print('tokens shape: ', tokens.shape)
         #raise ValueError('stop here')
         mask = self.mask
         mask_out = self.mask_out
@@ -280,9 +292,10 @@ class VectorGPTTrainer(Trainer):
         mask_original = torch.tensor([False] + mask.tolist()).bool() #mask unshifted by one 
         
         if labels is not None:
+            #labels = labels.to(device)
             #ensure mask is of the right length for the labels shifted by one
-            mask = mask[:labels.size(1)-1].bool()
-            mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
+            mask = mask[:labels.size(1)-1].bool().to(device)
+            #mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
             
             mask_idx = torch.where(mask_original)[0]
             if len(mask_idx) > 0: 
@@ -290,7 +303,9 @@ class VectorGPTTrainer(Trainer):
             else: 
                 raise ValueError('No context length found')
             
-            generated = inputs['inputs'][:,:context_len,:]
+            generated = inputs['inputs'][:,:context_len,:].to(device)
+            # Ensure generated is on the same device as the model
+            #generated = generated.to(device)
             #generated = sliced_inputs.clone()  # Forward pass without labels
 
             # Iteratively generate the next tokens
@@ -309,7 +324,7 @@ class VectorGPTTrainer(Trainer):
                     next_token = logits[:, -1:, :]  # get the most recent token
                     generated = torch.cat((generated, next_token), dim=1)  # append the next token
                 else: 
-                    generated = torch.cat((generated, labels[:,index,:].unsqueeze(1)), dim=1)
+                    generated = torch.cat((generated, labels[:,index,:].unsqueeze(1).to(device)), dim=1)
             
             #ignore first token 
             generated = generated[:,1:,:]   
@@ -330,13 +345,25 @@ class VectorGPTTrainer(Trainer):
             loss = loss.mean()
 
             mask_out = mask_out.bool()
-            out_tgt = self.model_tgt.decoder(tgt)
+            out_tgt = self.model_tgt.decoder(tgt.to(device))
             out_pred = model.decoder(pred)
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
             #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
-            kl = kl_loss(out_pred_masked, out_tgt_masked)
+            eval_mode = 'kl'
+            if eval_mode == 'kl':
+                penalty = kl_loss(out_pred_masked, out_tgt_masked)
+            if eval_mode == 'NLL':
+                logits_logprob = F.log_softmax(out_pred_masked, dim=-1)
+                penalty = F.nll_loss(
+                    logits_logprob.view(-1, logits_logprob.size(-1)),
+                    tokens.view(-1),
+                    reduction="mean"
+                )
+                print('perplexity: ', torch.exp(penalty))
 
+            regular = 0.5
+            loss_final = (1-regular)*loss + regular*penalty 
             # Print the 10 largest values in out_tgt_masked and their coordinates
             values, indices = torch.topk(out_tgt_masked.view(-1), 10)
             coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
@@ -346,11 +373,8 @@ class VectorGPTTrainer(Trainer):
                 b, p, d = coords[0][i], coords[1][i], coords[2][i]
                 print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
             
-            print('kl loss: ', kl)
+            print('penalty: ', penalty)
             print('huber loss: ', loss) 
-            
-            regular = 0.5
-            loss_final = (1-regular)*loss + regular*kl
         else:
             loss_final = None
 
@@ -412,7 +436,8 @@ if __name__ == "__main__":
     print('number of samples in dataset: ', len(dataset.data))
     print('datapoint shape: ', dataset.data[0].shape)
     print('mask: ', dataset.mask)
-    print('mask_out: ', dataset.mask_out)   
+    print('mask_out: ', dataset.mask_out)  
+    print('tokens: ', dataset.token_data) 
 
     # Train/Validation/Test split
     valid_size = min(int(0.15 * len(dataset)), 100)
@@ -425,7 +450,7 @@ if __name__ == "__main__":
     def collate_fn(batch):
         inputs = torch.stack([item["inputs"] for item in batch])
         labels = torch.stack([item["labels"] for item in batch])
-        tokens = [item["tokens"] for item in batch]  # or torch.stack(...) if they are tensors
+        tokens = torch.stack([item["tokens"] for item in batch])  # or torch.stack(...) if they are tensors
         
         return {
             "inputs": inputs,
@@ -519,7 +544,8 @@ if __name__ == "__main__":
         eval_dataset=valid_dataset,
         tokenizer=None,  # Not needed for vector-based tasks
         custom_args = custom_args,
-        train_loader = train_loader
+        train_loader = train_loader,
+        valid_loader=valid_loader
     )
 
     import json
@@ -581,6 +607,18 @@ if __name__ == "__main__":
         f'./plots/output_{args.input_dim}_{args.num_layers}_{args.model_emb}_{args.model_layers}_{timestamp}loss_plot.png',
         plot_interval=200  # for example
     )
+
+    class PrintLossCallback(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs is None:
+                return
+            if "loss" in logs:
+                print(f"Step {state.global_step}: Training Loss: {logs['loss']:.4f}")
+            if "eval_loss" in logs:
+                print(f"Step {state.global_step}: Validation Loss: {logs['eval_loss']:.4f}")
+
+    # Add the callback to your Trainer
+    trainer.add_callback(PrintLossCallback())
 
     trainer.add_callback(plot_callback)
 
