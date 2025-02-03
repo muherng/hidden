@@ -128,7 +128,7 @@ class VectorGPTTrainer(Trainer):
         self.mask = custom_args['mask']
         self.mask_out = custom_args['mask_out']
         self.ntoken = custom_args['ntoken']
-        self.print_interval = 1000
+        self.print_interval = 100
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         # Load the original model and move it to the device
@@ -190,8 +190,8 @@ class VectorGPTTrainer(Trainer):
             tgt_mask = tgt[:,mask,:]   
 
             huber_fn = nn.HuberLoss(reduction="none")
-            loss = huber_fn(pred_mask, tgt_mask)
-            loss = loss.mean()
+            huber_loss = huber_fn(pred_mask, tgt_mask)
+            huber_loss = huber_loss.mean()
 
             mask_out = mask_out.bool()
             out_tgt = self.model_tgt.decoder(tgt)
@@ -202,11 +202,12 @@ class VectorGPTTrainer(Trainer):
             out_pred_masked = out_pred[:,mask_out,:]
             kl = kl_loss(out_pred_masked, out_tgt_masked)
             regular = 0.5
-            loss = (1-regular)*loss + regular*kl
+            loss = (1-regular)*huber_loss + regular*kl
             #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
             # Print the coordinates with the largest loss intermittently
-            #if False and self.state.global_step % self.print_interval == 0:
-            #    print("kl loss: ", kl)
+            if self.state.global_step % self.print_interval == 0:
+                print("train kl loss: ", kl)
+                print("train huber loss: ", huber_loss)
             #    with torch.no_grad(): 
             #        eval_loss = self.eval_loss(model,inputs_copy)
             #        print('Evaluation Loss: ', eval_loss)
@@ -296,6 +297,7 @@ class VectorGPTTrainer(Trainer):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
         """
+        model.eval()
 
         labels = inputs.pop("labels", None).to(device)
         tokens = inputs.pop("tokens").to(device)
@@ -471,8 +473,8 @@ if __name__ == "__main__":
     print('tokens: ', dataset.token_data) 
 
     # Train/Validation/Test split
-    valid_size = min(int(0.15 * len(dataset)), 100)
-    test_size = min(int(0.15 * len(dataset)), 100)
+    valid_size = min(int(0.15 * len(dataset)), 1000)
+    test_size = min(int(0.15 * len(dataset)), 1000)
     train_size = len(dataset) - valid_size - test_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
@@ -523,9 +525,9 @@ if __name__ == "__main__":
         n_layer=model_layers,       # transformer layers
         n_head=12,        # attention heads
         input_dim=input_dim,  # input vector dimension
-        embd_pdrop=0.0,
-        resid_pdrop=0.0,
-        attn_pdrop=0.0,
+        embd_pdrop=0.1,
+        resid_pdrop=0.1,
+        attn_pdrop=0.1,
         ntokens = dataset.ntoken
     )
     model = VectorGPTModel(config)
@@ -541,7 +543,7 @@ if __name__ == "__main__":
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=False,         # Overwrite existing output dir
         eval_strategy="steps",             # Evaluate at the end of each epoch
-        eval_steps=100,                    # Evaluate every 100 steps
+        eval_steps=500,                    # Evaluate every 100 steps
         save_strategy="steps",             # Save checkpoints every epoch
         logging_dir="./logs",              # Directory for TensorBoard logs
         logging_steps=100,                  # Log every 10 steps for finer feedback
@@ -550,7 +552,7 @@ if __name__ == "__main__":
         metric_for_best_model="eval_loss", # Use validation loss for checkpoint selection
         greater_is_better=False,           # Lower loss is better
         learning_rate=3e-4,                # Lower learning rate for stability 3e-4 original setting
-        weight_decay=0.0,                 # Weight decay for regularization original 0.01
+        weight_decay=0.01,                 # Weight decay for regularization original 0.01
         adam_beta1=0.9,                    # First momentum parameter
         adam_beta2=0.98,                   # Second momentum parameter
         adam_epsilon=1e-6,                 # Epsilon for numerical stability
