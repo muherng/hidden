@@ -281,11 +281,11 @@ class VectorGPTTrainer(Trainer):
                 total_transf_perplexity += transf_perplexity.item()
                 total_lstm_perplexity += lstm_perplexity.item()
             nb_steps += 1
-        mean_loss = total_loss / nb_steps if nb_steps > 0 else float("inf")
-        mean_kl = total_kl / nb_steps if nb_steps > 0 else float("inf")
-        mean_huber_loss = total_huber_loss / nb_steps if nb_steps > 0 else float("inf")
-        mean_transf_perplexity = total_transf_perplexity / nb_steps if nb_steps > 0 else float("inf")
-        mean_lstm_perplexity = total_lstm_perplexity / nb_steps if nb_steps > 0 else float("inf")
+        mean_loss = total_loss / nb_steps 
+        mean_kl = total_kl / nb_steps 
+        mean_huber_loss = total_huber_loss / nb_steps 
+        mean_transf_perplexity = total_transf_perplexity / nb_steps 
+        mean_lstm_perplexity = total_lstm_perplexity / nb_steps 
         print("Evaluation Loss:", mean_loss)
         print("Evaluation KL Loss:", mean_kl)
         print("Evaluation Huber Loss:", mean_huber_loss)
@@ -393,6 +393,7 @@ class VectorGPTTrainer(Trainer):
                 #model_obj = torch.load('saved_models/LSTM/100_2model.pt', map_location=device)
                 #model_obj.to(device)
                 #model_obj.eval()
+                #model_obj.decoder 
 
 
             regular = 0.5
@@ -503,7 +504,7 @@ if __name__ == "__main__":
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=32,
-        shuffle=True,
+        shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn
     )
