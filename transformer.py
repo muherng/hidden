@@ -350,7 +350,7 @@ class VectorGPTTrainer(Trainer):
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
             #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
-            eval_mode = 'kl'
+            eval_mode = 'NLL'
             if eval_mode == 'kl':
                 penalty = kl_loss(out_pred_masked, out_tgt_masked)
             if eval_mode == 'NLL':
@@ -360,7 +360,14 @@ class VectorGPTTrainer(Trainer):
                     tokens.view(-1),
                     reduction="mean"
                 )
-                print('perplexity: ', torch.exp(penalty))
+                print('perplexity of transformer: ', torch.exp(penalty))
+                lstm_logits_logprob = F.log_softmax(out_tgt_masked, dim=-1)
+                lstm_penalty = F.nll_loss(
+                    lstm_logits_logprob.view(-1, lstm_logits_logprob.size(-1)),
+                    tokens.view(-1),
+                    reduction="mean"
+                )
+                print('perplexity of lstm: ', torch.exp(lstm_penalty))
 
             regular = 0.5
             loss_final = (1-regular)*loss + regular*penalty 
