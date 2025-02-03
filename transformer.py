@@ -134,7 +134,8 @@ class VectorGPTTrainer(Trainer):
         # Load the original model and move it to the device
         model_tgt = torch.load(f'saved_models/LSTM/{input_dim}_{num_layers}model.pt', map_location=device)
         model_tgt.to(device)
-        self.model_tgt = model
+        model_tgt.eval()
+        self.model_tgt = model_tgt
         super().__init__(*args, **kwargs)
     
     def get_train_dataloader(self):
@@ -263,15 +264,32 @@ class VectorGPTTrainer(Trainer):
         """
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
         total_loss = 0.0
+        total_kl = 0.0
+        total_huber_loss = 0.0
+        total_transf_perplexity = 0.0
+        total_lstm_perplexity = 0.0
         nb_steps = 0
         self.model.eval()
         for batch in eval_dataloader:
             with torch.no_grad():
-                loss = self.eval_loss(self.model, batch)
-                total_loss += loss.item()
+                loss_final, kl, huber_loss, transf_perplexity, lstm_perplexity  = self.eval_loss(self.model, batch)
+                #total_loss += loss.item()
+                total_loss += loss_final.item()
+                total_kl += kl.item()
+                total_huber_loss += huber_loss.item()
+                total_transf_perplexity += transf_perplexity.item()
+                total_lstm_perplexity += lstm_perplexity.item()
             nb_steps += 1
         mean_loss = total_loss / nb_steps if nb_steps > 0 else float("inf")
+        mean_kl = total_kl / nb_steps if nb_steps > 0 else float("inf")
+        mean_huber_loss = total_huber_loss / nb_steps if nb_steps > 0 else float("inf")
+        mean_transf_perplexity = total_transf_perplexity / nb_steps if nb_steps > 0 else float("inf")
+        mean_lstm_perplexity = total_lstm_perplexity / nb_steps if nb_steps > 0 else float("inf")
         print("Evaluation Loss:", mean_loss)
+        print("Evaluation KL Loss:", mean_kl)
+        print("Evaluation Huber Loss:", mean_huber_loss)
+        print("Evaluation Transformer Perplexity:", mean_transf_perplexity)
+        print("Evaluation LSTM Perplexity:", mean_lstm_perplexity)  
         return {f"{metric_key_prefix}_loss": mean_loss}
 
     def eval_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -281,8 +299,8 @@ class VectorGPTTrainer(Trainer):
 
         labels = inputs.pop("labels", None).to(device)
         tokens = inputs.pop("tokens").to(device)
-        print('labels: ', labels.shape)
-        print('tokens shape: ', tokens.shape)
+        #print('labels: ', labels.shape)
+        #print('tokens shape: ', tokens.shape)
         #raise ValueError('stop here')
         mask = self.mask
         mask_out = self.mask_out
@@ -341,8 +359,8 @@ class VectorGPTTrainer(Trainer):
             tgt_mask = tgt[:,mask,:]   
 
             huber_fn = nn.HuberLoss(reduction="none")
-            loss = huber_fn(pred_mask, tgt_mask)
-            loss = loss.mean()
+            huber_loss = huber_fn(pred_mask, tgt_mask)
+            huber_loss = huber_loss.mean()
 
             mask_out = mask_out.bool()
             out_tgt = self.model_tgt.decoder(tgt.to(device))
@@ -350,45 +368,51 @@ class VectorGPTTrainer(Trainer):
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
             #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
-            eval_mode = 'NLL'
+            eval_mode = 'kl'
             if eval_mode == 'kl':
-                penalty = kl_loss(out_pred_masked, out_tgt_masked)
-            if eval_mode == 'NLL':
+                kl = kl_loss(out_pred_masked, out_tgt_masked)
+                #print('kl loss: ', kl)
                 logits_logprob = F.log_softmax(out_pred_masked, dim=-1)
                 penalty = F.nll_loss(
                     logits_logprob.view(-1, logits_logprob.size(-1)),
                     tokens.view(-1),
                     reduction="mean"
                 )
-                print('perplexity of transformer: ', torch.exp(penalty))
+                transf_perplexity = torch.exp(penalty)
+                #print('perplexity of transformer: ', torch.exp(penalty))
                 lstm_logits_logprob = F.log_softmax(out_tgt_masked, dim=-1)
                 lstm_penalty = F.nll_loss(
                     lstm_logits_logprob.view(-1, lstm_logits_logprob.size(-1)),
                     tokens.view(-1),
                     reduction="mean"
                 )
-                print('perplexity of lstm: ', torch.exp(lstm_penalty))
+                lstm_perplexity = torch.exp(lstm_penalty)
+                #print('perplexity of lstm: ', torch.exp(lstm_penalty))
+                #model_obj = torch.load('saved_models/LSTM/100_2model.pt', map_location=device)
+                #model_obj.to(device)
+                #model_obj.eval()
+
 
             regular = 0.5
-            loss_final = (1-regular)*loss + regular*penalty 
+            loss_final = (1-regular)*huber_loss + regular*kl 
             # Print the 10 largest values in out_tgt_masked and their coordinates
-            values, indices = torch.topk(out_tgt_masked.view(-1), 10)
-            coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
+            #values, indices = torch.topk(out_tgt_masked.view(-1), 10)
+            #coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
 
-            print("Top 10 coordinates in out_tgt_masked and corresponding out_pred_masked values:")
-            for i, val in enumerate(values):
-                b, p, d = coords[0][i], coords[1][i], coords[2][i]
-                print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
+            #print("Top 10 coordinates in out_tgt_masked and corresponding out_pred_masked values:")
+            #for i, val in enumerate(values):
+            #    b, p, d = coords[0][i], coords[1][i], coords[2][i]
+            #    print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
             
-            print('penalty: ', penalty)
-            print('huber loss: ', loss) 
+            #print('kl divergence: ', kl)
+            #print('huber loss: ', loss) 
         else:
             loss_final = None
 
         if return_outputs:
             return loss_final, pred  # Return both loss and outputs if requested
         else:
-            return loss_final  # Return only the scalar loss
+            return loss_final, kl, huber_loss, transf_perplexity, lstm_perplexity  # Return only the scalar loss
 
 # ----------------------------------------------------
 # 2. Training Script
