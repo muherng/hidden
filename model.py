@@ -178,7 +178,7 @@ class RNNModel(nn.Module):
 
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return data, mask, mask_out, hidden, out,      
+        return data, mask, mask_out, hidden, out     
 
     def collect_hidden_states_LSTM(self, input_tensor, hidden):
         """
