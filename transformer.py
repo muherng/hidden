@@ -200,13 +200,16 @@ class VectorGPTTrainer(Trainer):
             #mask out the input embeddings
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
-            kl = kl_loss(out_pred_masked, out_tgt_masked)
+            reg = 'huber'
+            if reg == 'kl':
+                penalty = kl_loss(out_pred_masked, out_tgt_masked)
+            if reg == 'huber': 
+                penalty = huber_fn(out_pred_masked, out_tgt_masked).mean()
             regular = 0.5
-            loss = (1-regular)*huber_loss + regular*kl
-            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
+            loss = (1-regular)*huber_loss + regular*penalty
             # Print the coordinates with the largest loss intermittently
             if self.state.global_step % self.print_interval == 0:
-                print("train kl loss: ", kl)
+                print("train penalty loss: ", penalty)
                 print("train huber loss: ", huber_loss)
             #    with torch.no_grad(): 
             #        eval_loss = self.eval_loss(model,inputs_copy)
@@ -291,8 +294,14 @@ class VectorGPTTrainer(Trainer):
         print("Evaluation Huber Loss:", mean_huber_loss)
         print("Evaluation Transformer Perplexity:", mean_transf_perplexity)
         print("Evaluation LSTM Perplexity:", mean_lstm_perplexity)  
-        return {f"{metric_key_prefix}_loss": mean_loss}
-
+        #return {f"{metric_key_prefix}_loss": mean_loss}
+        # Return all necessary metrics so that they become part of the logged dictionary.
+        return {
+            f"{metric_key_prefix}_loss": mean_loss,
+            "mean_transf_perplexity": mean_transf_perplexity,
+            "mean_lstm_perplexity": mean_lstm_perplexity
+        }
+        
     def eval_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
@@ -373,15 +382,15 @@ class VectorGPTTrainer(Trainer):
             out_pred = model.decoder(pred)
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
-            #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
+            penalty = huber_fn(out_pred_masked, out_tgt_masked).mean()
 
             # Apply the mask to predictions and labels
-            logits = outputs.logits
-            pred_unused = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
-            out_pred_unused = model.decoder(pred_unused).to(device)
-            out_pred_masked_unused = out_pred_unused[:,mask_out,:].to(device)
-            kl_unused = kl_loss(out_pred_masked_unused, out_tgt_masked)
-            print('kl_unused: ', kl_unused)
+            #logits = outputs.logits
+            #pred_unused = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
+            #out_pred_unused = model.decoder(pred_unused).to(device)
+            #out_pred_masked_unused = out_pred_unused[:,mask_out,:].to(device)
+            #kl_unused = kl_loss(out_pred_masked_unused, out_tgt_masked)
+            #print('kl_unused: ', kl_unused)
 
             eval_mode = 'kl'
             if eval_mode == 'kl':
@@ -403,14 +412,55 @@ class VectorGPTTrainer(Trainer):
                 )
                 lstm_perplexity = torch.exp(lstm_penalty)
                 #print('perplexity of lstm: ', torch.exp(lstm_penalty))
-                #model_obj = torch.load('saved_models/LSTM/100_2model.pt', map_location=device)
-                #model_obj.to(device)
-                #model_obj.eval()
-                #model_obj.decoder 
+                debug = False 
+                if debug == True: 
+                    model_obj = torch.load('saved_models/LSTM/100_2model.pt', map_location=device)
+                    model_obj.to(device)
+                    model_obj.eval()
+                    #model_obj.decoder
+                    # Extract initial hidden/cell states from the first 'context_len' tokens of inputs["inputs"]
+                    # inputs["inputs"] is shape: (batch_size, context_len + ..., hidden_dim)
+                    init_states = inputs["inputs"][:, :context_len, :]
+                    # For a 2-layer LSTM, assume:
+                    #   Layer 1 hidden state: init_states[:, 0, :]
+                    #   Layer 1 cell state:   init_states[:, 1, :]
+                    #   Layer 2 hidden state: init_states[:, 2, :]
+                    #   Layer 2 cell state:   init_states[:, 3, :]
+                    h0 = torch.stack([init_states[:, 0, :], init_states[:, 2, :]], dim=0)   # (2, batch_size, hidden_dim)
+                    c0 = torch.stack([init_states[:, 1, :], init_states[:, 3, :]], dim=0)   # (2, batch_size, hidden_dim)
+                    hidden0 = (h0, c0)
+                    
+                    # Prepare tokens for the LSTM:
+                    # tokens: (batch_size, token_seq) => LSTM expects (token_seq, batch_size)
+                    tokens_seq = tokens.t()  # shape: (token_seq, batch_size)
+                    
+                    # Pass tokens through the lstm model_obj's encoder and LSTM:
+                    embedded = model_obj.encoder(tokens_seq)              # (token_seq, batch_size, embed_dim)
+                    out_lstm, _ = model_obj.rnn(embedded, hidden0)          # (token_seq, batch_size, hidden_dim)
+                    
+                    # Project LSTM outputs using the pretrained decoder
+                    logits_lstm = model_obj.decoder(out_lstm)               # (token_seq, batch_size, vocab_size)
+                    # Transpose back to (batch_size, token_seq, vocab_size)
+                    logits_lstm = logits_lstm.transpose(0, 1)
+                    
+                    # Apply softmax to convert to probability distributions
+                    probs_lstm = torch.softmax(logits_lstm, dim=-1)
+                    probs_target = torch.softmax(out_tgt_masked, dim=-1)
+                    
+                    # Adjust for off-by-one:
+                    # Compare all but the final token in probs_lstm with all but the first token in probs_target.
+                    diff = torch.abs(probs_lstm[:, :-1, :] - probs_target[:, 1:, :])
+                    max_diff = diff.max().item()
+                    mean_diff = diff.mean().item()
+                    
+                    print("DEBUG LSTM outputs (after softmax and off-by-one adjustment):")
+                    print("Max difference between debug LSTM probs and out_tgt_masked probs:", max_diff)
+                    print("Mean difference between debug LSTM probs and out_tgt_masked probs:", mean_diff)
+                    print("DEBUG LSTM outputs (after softmax and off-by-one adjustment):")   
 
 
             regular = 0.5
-            loss_final = (1-regular)*huber_loss + regular*kl 
+            loss_final = (1-regular)*huber_loss + regular*penalty 
             # Print the 10 largest values in out_tgt_masked and their coordinates
             #values, indices = torch.topk(out_tgt_masked.view(-1), 10)
             #coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
@@ -487,8 +537,8 @@ if __name__ == "__main__":
     print('tokens: ', dataset.token_data) 
 
     # Train/Validation/Test split
-    valid_size = min(int(0.15 * len(dataset)), 1000)
-    test_size = min(int(0.15 * len(dataset)), 1000)
+    valid_size = min(int(0.15 * len(dataset)), 3000)
+    test_size = min(int(0.15 * len(dataset)), 3000)
     train_size = len(dataset) - valid_size - test_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
