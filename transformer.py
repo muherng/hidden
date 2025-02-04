@@ -294,6 +294,34 @@ class VectorGPTTrainer(Trainer):
         print("Evaluation Huber Loss:", mean_huber_loss)
         print("Evaluation Transformer Perplexity:", mean_transf_perplexity)
         print("Evaluation LSTM Perplexity:", mean_lstm_perplexity)  
+        # Save perplexities over time
+        perplex_file = f"./results/perplexity_{timestamp}.pt"
+        new_entry = torch.tensor([[mean_transf_perplexity, mean_lstm_perplexity]])
+        if os.path.exists(perplex_file):
+            past = torch.load(perplex_file)
+            updated = torch.cat((past, new_entry), dim=0)
+        else:
+            updated = new_entry
+        torch.save(updated, perplex_file)
+        if os.path.exists(perplex_file):
+            # Load the tensor and convert to numpy array
+            data = torch.load(perplex_file).cpu().numpy()
+            steps = range(data.shape[0])
+            transformer_perp = data[:, 0]
+            lstm_perp = data[:, 1]
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(steps, transformer_perp, label="Transformer Perplexity", marker="v")
+            plt.plot(steps, lstm_perp, label="LSTM Perplexity", marker="s")
+            plt.xlabel("Evaluation Steps")
+            plt.ylabel("Perplexity")
+            plt.title("Transformer vs. LSTM Perplexity over Epochs")
+            plt.legend()
+            plt.ylim(0.0, 1000)
+            plt.savefig(f"./plots/perplexity_plot_{timestamp}.png")
+            plt.show()
+        else:
+            print("Perplexity file not found at", perplex_file)
         #return {f"{metric_key_prefix}_loss": mean_loss}
         # Return all necessary metrics so that they become part of the logged dictionary.
         return {
@@ -301,7 +329,7 @@ class VectorGPTTrainer(Trainer):
             "mean_transf_perplexity": mean_transf_perplexity,
             "mean_lstm_perplexity": mean_lstm_perplexity
         }
-        
+
     def eval_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Custom loss computation: Ensure a scalar tensor is returned for loss.
@@ -537,8 +565,8 @@ if __name__ == "__main__":
     print('tokens: ', dataset.token_data) 
 
     # Train/Validation/Test split
-    valid_size = min(int(0.15 * len(dataset)), 3000)
-    test_size = min(int(0.15 * len(dataset)), 3000)
+    valid_size = min(int(0.15 * len(dataset)), 1000)
+    test_size = min(int(0.15 * len(dataset)), 1000)
     train_size = len(dataset) - valid_size - test_size
 
     train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
@@ -607,7 +635,7 @@ if __name__ == "__main__":
         save_steps=500,                    # Save checkpoint every 500 steps
         overwrite_output_dir=False,         # Overwrite existing output dir
         eval_strategy="steps",             # Evaluate at the end of each epoch
-        eval_steps=500,                    # Evaluate every 100 steps
+        eval_steps=100,                    # Evaluate every 100 steps
         save_strategy="steps",             # Save checkpoints every epoch
         logging_dir="./logs",              # Directory for TensorBoard logs
         logging_steps=100,                  # Log every 10 steps for finer feedback
@@ -685,16 +713,24 @@ if __name__ == "__main__":
 
                 training_loss = losses.get("training_loss", [])
                 validation_loss = losses.get("validation_loss", [])
+                transf_perplexity = losses.get("mean_transf_perplexity", [])
+                lstm_perplexity = losses.get("mean_lstm_perplexity", [])
 
                 plt.figure(figsize=(10, 6))
-                plt.plot(training_loss, label="Training Loss", marker="o")
-                if validation_loss:
-                    plt.plot(validation_loss, label="Validation Loss", marker="x")
+                #plt.plot(training_loss, label="Training Loss", marker="o")
+                #if validation_loss:
+                #    plt.plot(validation_loss, label="Validation Loss", marker="x")
+                if transf_perplexity:
+                    plt.plot(transf_perplexity, label="Transformer Perplexity", marker="v")
+                if lstm_perplexity:
+                    plt.plot(lstm_perplexity, label="LSTM Perplexity", marker="s")
                 plt.xlabel("Steps")
-                plt.ylabel("Loss")
-                plt.title("Training and Validation Loss")
+                plt.ylabel("perplexity")
+                plt.title("Transformer and LSTM Perplexity")
                 plt.legend()
-                plt.grid(True)
+                # Option 1: Set fixed y-limits (adjust these numbers as needed)
+                plt.ylim(0.0, 40000)
+
                 plt.savefig(self.plot_file)
                 plt.close()
 
