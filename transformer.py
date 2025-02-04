@@ -301,6 +301,10 @@ class VectorGPTTrainer(Trainer):
 
         labels = inputs.pop("labels", None).to(device)
         tokens = inputs.pop("tokens").to(device)
+        inputs["inputs"] = inputs["inputs"].to(device)
+        model.to(device)
+        #inputs.to(device)
+        outputs = model(**inputs)
         #print('labels: ', labels.shape)
         #print('tokens shape: ', tokens.shape)
         #raise ValueError('stop here')
@@ -370,6 +374,15 @@ class VectorGPTTrainer(Trainer):
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
             #additional_loss = huber_fn(out_pred_masked, out_tgt_masked).mean()
+
+            # Apply the mask to predictions and labels
+            logits = outputs.logits
+            pred_unused = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
+            out_pred_unused = model.decoder(pred_unused).to(device)
+            out_pred_masked_unused = out_pred_unused[:,mask_out,:].to(device)
+            kl_unused = kl_loss(out_pred_masked_unused, out_tgt_masked)
+            print('kl_unused: ', kl_unused)
+
             eval_mode = 'kl'
             if eval_mode == 'kl':
                 kl = kl_loss(out_pred_masked, out_tgt_masked)
