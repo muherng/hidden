@@ -3,7 +3,11 @@ vector_gpt_trainer/
 plots/
 results/
 
-# IGNORE EVERYTHING inside folderA
+# IGNORE EVERYTHING inside folder
 logs/**
-# BUT ALLOW .gitkeep or .gitignore in folderA
+# BUT ALLOW .gitkeep in folder
 !logs/.gitkeep
+
+# IGNORE EVERYTHING inside folderB
+plots/**
+!plots/.gitkeep
