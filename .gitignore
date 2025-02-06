@@ -8,6 +8,10 @@ logs/**
 # BUT ALLOW .gitkeep in folder
 !logs/.gitkeep
 
-# IGNORE EVERYTHING inside folderB
+# IGNORE EVERYTHING inside folder
 plots/**
 !plots/.gitkeep
+
+# IGNORE EVERYTHING inside folder
+results/**
+!results/.gitkeep
