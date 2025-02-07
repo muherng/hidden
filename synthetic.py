@@ -2,6 +2,10 @@ import torch
 from torch.utils.data import Dataset
 from data import Corpus
 
+import warnings
+# Suppress FutureWarning messages from torch.load about weights_only usage
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`", category=FutureWarning)
+
 # ----------------------------------------------------
 # 1. Synthetic Dataset of Random Vectors
 # ----------------------------------------------------
