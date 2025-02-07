@@ -15,3 +15,7 @@ plots/**
 # IGNORE EVERYTHING inside folder
 results/**
 !results/.gitkeep
+
+# IGNORE EVERYTHING inside folder
+hidden_states/**
+!hidden_states/.gitkeep

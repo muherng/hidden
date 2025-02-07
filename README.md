@@ -1,23 +1,14 @@
-# Word-level Language Modeling using RNN and Transformer
+Command for training an LSTM on wikitext-2 
 
-This example trains a multi-layer RNN (Elman, GRU, or LSTM) or Transformer on a language modeling task. By default, the training script uses the Wikitext-2 dataset, provided.
-The trained model can then be used by the generate script to generate new text.
-
-```bash
-python main.py --cuda --epochs 6           # Train a LSTM on Wikitext-2 with CUDA.
-python main.py --cuda --epochs 6 --tied    # Train a tied LSTM on Wikitext-2 with CUDA.
-python main.py --cuda --tied               # Train a tied LSTM on Wikitext-2 with CUDA for 40 epochs.
-python main.py --cuda --epochs 6 --model Transformer --lr 5
-                                           # Train a Transformer model on Wikitext-2 with CUDA.
-
-python generate.py                         # Generate samples from the default model checkpoint.
+```bash 
+python train.py --cuda --epochs 20           # Train a LSTM on Wikitext-2 with CUDA.
 ```
 
-The model uses the `nn.RNN` module (and its sister modules `nn.GRU` and `nn.LSTM`) or Transformer module (`nn.TransformerEncoder` and `nn.TransformerEncoderLayer`) which will automatically use the cuDNN backend if run on CUDA with cuDNN installed.
+The model uses the `nn.RNN` module 
 
 During training, if a keyboard interrupt (Ctrl-C) is received, training is stopped and the current model is evaluated against the test dataset.
 
-The `main.py` script accepts the following arguments:
+The `train.py` script accepts the following arguments:
 
 ```bash
 optional arguments:
@@ -45,12 +36,4 @@ optional arguments:
   --dry-run             verify the code and the model
 ```
 
-With these arguments, a variety of models can be tested.
-As an example, the following arguments produce slower but better models:
 
-```bash
-python main.py --cuda --emsize 650 --nhid 650 --dropout 0.5 --epochs 40
-python main.py --cuda --emsize 650 --nhid 650 --dropout 0.5 --epochs 40 --tied
-python main.py --cuda --emsize 1500 --nhid 1500 --dropout 0.65 --epochs 40
-python main.py --cuda --emsize 1500 --nhid 1500 --dropout 0.65 --epochs 40 --tied
-```
