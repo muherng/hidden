@@ -168,8 +168,6 @@ class VectorGPTTrainer(Trainer):
         logits = outputs.logits  # (bsz, seq_len, vocab_size)
         
         if labels is not None:
-            # Create a mask for every other token, the size of the mask is seq_len - 1 because we are predicting the next token
-            # TODO: adjust the mask for deep networks
             #default mask is every other token 
             if mask is None: 
                 print('warning: no mask provided, using default mask')
@@ -211,9 +209,6 @@ class VectorGPTTrainer(Trainer):
             if self.state.global_step % self.print_interval == 0:
                 print("train penalty loss: ", penalty)
                 print("train huber loss: ", huber_loss)
-            #    with torch.no_grad(): 
-            #        eval_loss = self.eval_loss(model,inputs_copy)
-            #        print('Evaluation Loss: ', eval_loss)
         else:
             loss = None
 
@@ -298,14 +293,14 @@ class VectorGPTTrainer(Trainer):
         perplex_file = f"./results/perplexity_{timestamp}.pt"
         new_entry = torch.tensor([[mean_transf_perplexity, mean_lstm_perplexity]])
         if os.path.exists(perplex_file):
-            past = torch.load(perplex_file)
+            past = torch.load(perplex_file, weights_only=True)
             updated = torch.cat((past, new_entry), dim=0)
         else:
             updated = new_entry
         torch.save(updated, perplex_file)
         if os.path.exists(perplex_file):
             # Load the tensor and convert to numpy array
-            data = torch.load(perplex_file).cpu().numpy()
+            data = torch.load(perplex_file, weights_only=True).cpu().numpy()
             steps = range(data.shape[0])
             transformer_perp = data[:, 0]
             lstm_perp = data[:, 1]
@@ -319,7 +314,6 @@ class VectorGPTTrainer(Trainer):
             plt.legend()
             plt.ylim(0.0, 1000)
             plt.savefig(f"./plots/perplexity_plot_{timestamp}.png")
-            plt.show()
         else:
             print("Perplexity file not found at", perplex_file)
         #return {f"{metric_key_prefix}_loss": mean_loss}
@@ -340,23 +334,17 @@ class VectorGPTTrainer(Trainer):
         tokens = inputs.pop("tokens").to(device)
         inputs["inputs"] = inputs["inputs"].to(device)
         model.to(device)
-        #inputs.to(device)
         outputs = model(**inputs)
-        #print('labels: ', labels.shape)
-        #print('tokens shape: ', tokens.shape)
-        #raise ValueError('stop here')
         mask = self.mask
         mask_out = self.mask_out
-        # Extract the logits
-        #logits = outputs.logits  # (bsz, seq_len, vocab_size)
-        #TODO: make this unbelievably clear 
+
+        #The mask is applied to the inputs shifted by one.  We define mask_original to be the mask without shifting by one.  
+        #We do this so that it's incredibly clear how the mask is applied to the generated inputs.  
         mask_original = torch.tensor([False] + mask.tolist()).bool() #mask unshifted by one 
         
         if labels is not None:
-            #labels = labels.to(device)
             #ensure mask is of the right length for the labels shifted by one
             mask = mask[:labels.size(1)-1].bool().to(device)
-            #mask = mask.to(labels.device)  # Ensure mask is on the same device as labels
             
             mask_idx = torch.where(mask_original)[0]
             if len(mask_idx) > 0: 
@@ -364,10 +352,8 @@ class VectorGPTTrainer(Trainer):
             else: 
                 raise ValueError('No context length found')
             
-            generated = inputs['inputs'][:,:context_len,:].to(device)
             # Ensure generated is on the same device as the model
-            #generated = generated.to(device)
-            #generated = sliced_inputs.clone()  # Forward pass without labels
+            generated = inputs['inputs'][:,:context_len,:].to(device)
 
             # Iteratively generate the next tokens
             #resulting tensor is of len labels.size(1) + 1
@@ -375,8 +361,6 @@ class VectorGPTTrainer(Trainer):
             #we ignore the first token in the generated tensor 
             #later we will also ignore the last token in the generated tensor
             for index in range(labels.size(1)+1):
-                #print('index: ', index)
-                #print('generated size: ', generated.size())
                 if index < context_len: 
                     continue
                 #if last token is reached or mask is true, generate next token 
@@ -410,15 +394,7 @@ class VectorGPTTrainer(Trainer):
             out_pred = model.decoder(pred)
             out_tgt_masked = out_tgt[:,mask_out,:]
             out_pred_masked = out_pred[:,mask_out,:]
-            penalty = huber_fn(out_pred_masked, out_tgt_masked).mean()
-
-            # Apply the mask to predictions and labels
-            #logits = outputs.logits
-            #pred_unused = logits[:, :-1, :]  # (bsz, seq_len, vocab_size)
-            #out_pred_unused = model.decoder(pred_unused).to(device)
-            #out_pred_masked_unused = out_pred_unused[:,mask_out,:].to(device)
-            #kl_unused = kl_loss(out_pred_masked_unused, out_tgt_masked)
-            #print('kl_unused: ', kl_unused)
+            regularize = huber_fn(out_pred_masked, out_tgt_masked).mean()
 
             eval_mode = 'kl'
             if eval_mode == 'kl':
@@ -488,18 +464,7 @@ class VectorGPTTrainer(Trainer):
 
 
             regular = 0.5
-            loss_final = (1-regular)*huber_loss + regular*penalty 
-            # Print the 10 largest values in out_tgt_masked and their coordinates
-            #values, indices = torch.topk(out_tgt_masked.view(-1), 10)
-            #coords = np.unravel_index(indices.cpu().numpy(), out_tgt_masked.shape)
-
-            #print("Top 10 coordinates in out_tgt_masked and corresponding out_pred_masked values:")
-            #for i, val in enumerate(values):
-            #    b, p, d = coords[0][i], coords[1][i], coords[2][i]
-            #    print(f"{i+1}) TGT[{b}, {p}, {d}] = {val.item():.4f}, PRED = {out_pred_masked[b,p,d].item():.4f}")
-            
-            #print('kl divergence: ', kl)
-            #print('huber loss: ', loss) 
+            loss_final = (1-regular)*huber_loss + regular*regularize 
         else:
             loss_final = None
 
@@ -549,7 +514,6 @@ if __name__ == "__main__":
     if args.data == 'LDS':
         dataset = LinearDynamicsDataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN_TANH': 
-        print('RNN_TANH is now defunct')
         dataset = RNN_TANH_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, seed=42)
     if args.data == 'RNN': 
         dataset = RNN_Dataset(num_samples=num_samples, seq_len=seq_len, vector_dim=input_dim, num_layers=num_layers, seed=42)
@@ -558,11 +522,11 @@ if __name__ == "__main__":
 
     
     #TODO: RNN dataset is wrong order (seq_len, batch_size, input_dim) instead of (batch_size, seq_len, input_dim)
-    print('number of samples in dataset: ', len(dataset.data))
-    print('datapoint shape: ', dataset.data[0].shape)
-    print('mask: ', dataset.mask)
-    print('mask_out: ', dataset.mask_out)  
-    print('tokens: ', dataset.token_data) 
+    #print('number of samples in dataset: ', len(dataset.data))
+    #print('datapoint shape: ', dataset.data[0].shape)
+    #print('mask: ', dataset.mask)
+    #print('mask_out: ', dataset.mask_out)  
+    #print('tokens: ', dataset.token_data) 
 
     # Train/Validation/Test split
     valid_size = min(int(0.15 * len(dataset)), 1000)
@@ -600,16 +564,6 @@ if __name__ == "__main__":
         collate_fn=collate_fn
     )
 
-    # Iterating over the DataLoader
-    #for batch in train_loader:
-    #    inputs = batch["inputs"]
-    #    labels = batch["labels"]
-    #    tokens = batch["tokens"]
-        #print('tokens: ', tokens)
-    # DataLoader
-    #train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
-    #valid_loader = DataLoader(valid_dataset, batch_size=32, shuffle=False, pin_memory=True)
-    #test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
     # 2. Model configuration and instantiation
     config = VectorGPTConfig(
         n_positions=2000,  # must be >= 30 (seq_len)
@@ -753,7 +707,8 @@ if __name__ == "__main__":
     # Add the callback to your Trainer
     trainer.add_callback(PrintLossCallback())
 
-    trainer.add_callback(plot_callback)
+    # add plotting callback, right now plotting is handled manually in evaluate function.  
+    #trainer.add_callback(plot_callback)
 
     # 5. Start training
     trainer.train()

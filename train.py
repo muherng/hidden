@@ -15,9 +15,9 @@ parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of network (RNN_TANH, RNN_RELU, LSTM, GRU, Transformer)')
-parser.add_argument('--emsize', type=int, default=200,
+parser.add_argument('--emsize', type=int, default=100,
                     help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=200,
+parser.add_argument('--nhid', type=int, default=100,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=2,
                     help='number of layers')
@@ -25,7 +25,7 @@ parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=40,
+parser.add_argument('--epochs', type=int, default=10,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
@@ -206,10 +206,6 @@ if __name__ == '__main__':
     val_data = batchify(corpus.valid, eval_batch_size, device=device)
     test_data = batchify(corpus.test, eval_batch_size, device=device)
 
-    print('train_data', train_data.size())
-    print('train_data', train_data[0])
-    #raise ValueError('stop here')
-
     ###############################################################################
     # Build the model
     ###############################################################################
@@ -257,22 +253,22 @@ if __name__ == '__main__':
 
     #when running the model, the model is saved in the saved_models folder
     # Load the best saved model.
-    with open(args.save, 'rb') as f:
-        model = torch.load(f)
-        # after load the rnn params are not a continuous chunk of memory
-        # this makes them a continuous chunk, and will speed up forward pass
-        # Currently, only rnn model supports flatten_parameters function.
-        if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
-            model.rnn.flatten_parameters()
+    #with open(file, 'rb') as f:
+    #    model = torch.load(f)
+    #    # after load the rnn params are not a continuous chunk of memory
+    #    # this makes them a continuous chunk, and will speed up forward pass
+    #    # Currently, only rnn model supports flatten_parameters function.
+    #    if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
+    #        model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss = evaluate(test_data)
-    print('=' * 89)
-    print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
-        test_loss, math.exp(test_loss)))
-    print('=' * 89)
+    #test_loss = evaluate(test_data)
+    #print('=' * 89)
+    #print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+    #    test_loss, math.exp(test_loss)))
+    #print('=' * 89)
 
-    if len(args.onnx_export) > 0:
-        # Export the model in ONNX format.
-        export_onnx(args.onnx_export, batch_size=1, seq_len=args.bptt)
+    #if len(args.onnx_export) > 0:
+    #    # Export the model in ONNX format.
+    #    export_onnx(args.onnx_export, batch_size=1, seq_len=args.bptt)
 
