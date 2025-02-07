@@ -21,6 +21,13 @@ import datetime
 import numpy as np
 from helper import evaluate, kl_loss
 
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="`tokenizer` is deprecated and will be removed in version 5.0.0 for `VectorGPTTrainer.__init__`. Use `processing_class` instead.",
+    category=FutureWarning
+)
+
 # Generate a unique timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 

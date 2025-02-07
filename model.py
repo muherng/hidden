@@ -61,64 +61,11 @@ class RNNModel(nn.Module):
         else:
             return weight.new_zeros(self.nlayers, bsz, self.nhid)
     
-    def collect_hidden_states_RNN(self,input_tensor,hidden): 
-        # input: (seq_len, batch_size, input_dim)
-        # Collect hidden states from all layers of RNN
-        # This is useful for tasks like language modeling where we need to pass hidden states
-        # from all layers to the decoder.
-        #for now assume input_dim and hidden_dim are equal
-        #TODO: handle different input and hidden dimensions
-        seq_len = input_tensor.size(0)
-        batch_size = input_tensor.size(1)
-        data = []
-        mask = []
-        for t in range(seq_len):
-            #although out[0].unsqueeze(0) does nothing, 
-            #it is done to maintain notion of sequence length (dropped) 
-            #then we add a dimension representing the sequence length
-            #this maintains consistency with how we handle hidden_dim. 
-            for layer in range(self.nlayers): 
-                data.append(hidden[layer,:,:].unsqueeze(0))
-            #data.append(out[0].unsqueeze(0))
-            data.append(input_tensor[t].unsqueeze(0))
-            #mask is incremented by number of layers + number of input vectors per timestep
-            if t == 0: 
-                mask.extend([0]*(self.nlayers + 1))
-            if t > 0: 
-                mask.extend([1]*self.nlayers + [0])
-            
-            out,hidden = self.rnn(input_tensor[t].unsqueeze(0),hidden) 
-            #out shape: (1, batch_size, input_dim) because sequence length is 1
-            #hidden shape: (nlayers, batch_size, hidden_dim) 
-        data = torch.cat(data, dim=0)
-        #mask is applied only to every token after the first 
-        mask = torch.tensor(mask[1:])
-        if data.shape != (seq_len*(self.nlayers + 1), batch_size, self.nhid):
-            print("data shape: ", data.shape)
-            print("expected shape: ", (seq_len*(self.nlayers + 1), batch_size, self.nhid))
-            raise ValueError("Shape mismatch in data tensor")
-        if mask.shape[0] != seq_len*(self.nlayers + 1) - 1:
-            print("mask shape: ", mask.shape)
-            print("expected shape: ", (seq_len*(2*self.nlayers + 1) - 1))
-            raise ValueError("Shape mismatch in mask tensor")
-        return data, mask
-    
     def collect_hidden_from_tokens(self, hidden, out, input_tokens):
         # input_tokens: (seq_len, batch_size) of token indices
         # Collect hidden states from all layers of LSTM
-        # This is useful for tasks like language modeling where we need to pass hidden states
-        # from all layers to the decoder.
         #for now assume input_dim and hidden_dim are equal
-        #TODO: handle different input and hidden dimensions
-        #print('input_tokens: ', input_tokens.shape)
         input_tensor = self.encoder(input_tokens)
-        #print('input_tensor: ', input_tensor.shape)
-        
-        #seq_len = input_tokens.size(0)
-        #batch_size = input_tokens.size(1)
-        #input_dim = self.encoder.embedding_dim
-        #input_tensor = torch.randn(batch_size, seq_len, input_dim, device='cuda')
-        #input_tensor = input_tensor.permute(1, 0, 2).contiguous()
         # Unpack the initial hidden states (h0, c0)
         h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
 
@@ -162,7 +109,6 @@ class RNNModel(nn.Module):
         # which is (2 * nlayers + 2) tokens per timestep
         # each token is (batch_size, hidden_dim), so stack them all
         data = torch.cat(data, dim=0)                # shape => (seq_len*(2*nlayers + 2), batch_size, hidden_dim)
-        #print('data shape: ', data.shape)
         # mask (optional if you’re not using it)
         mask = torch.tensor(mask[1:])  # skip the very first element
         mask_out = torch.tensor(mask_out[1:]) 
@@ -179,76 +125,6 @@ class RNNModel(nn.Module):
         # Return everything
         # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
         return data, mask, mask_out, hidden, out     
-
-    def collect_hidden_states_LSTM(self, input_tensor, hidden):
-        """
-        This function manually unrolls the LSTM one timestep at a time, 
-        collecting the outputs and hidden states at each step.
-        
-        Args:
-            input_tensor: (seq_len, batch_size, input_dim)
-            hidden: (h, c), each (nlayers, batch_size, hidden_dim)
-        
-        Returns:
-            outputs: stacked LSTM outputs at each time step
-            all_hidden_states: a tuple (all_h, all_c), 
-                               each (seq_len+1, nlayers, batch_size, hidden_dim)
-                               where seq_len+1 includes the initial hidden state (index 0).
-            data: a tensor collecting (for each timestep t): 
-                  [h[layer] for all layers, c[layer] for all layers, out(t)] 
-            mask: a tensor analogous to your RNN code (may be ignored if not needed)
-        """
-
-        # Unpack the initial hidden states (h0, c0)
-        h, c = hidden  # Each has shape (nlayers, batch_size, hidden_dim)
-
-        # We’ll collect everything in lists first.
-        data = []
-        mask = []  # Initial mask
-        #length of mask is 2*self.nlayers + seq_len * (1+2*self.nlayers) 
-
-        seq_len = input_tensor.size(0)
-        batch_size = input_tensor.size(1)
-
-        # Manually unroll LSTM over each time step
-        for t in range(seq_len):
-            #first append the initial hidden/cell states for each layer
-            for layer in range(self.nlayers):
-                data.append(h[layer, :, :].unsqueeze(0))  # shape (1, batch_size, hidden_dim)
-                data.append(c[layer, :, :].unsqueeze(0))
-                print("c shape: ", data[-1].shape)
-                print("h shape: ", data[-2].shape)
-            #second, append the first input tensor
-            data.append(input_tensor[t].unsqueeze(0))  # shape (batch_size, hidden_dim), will unsqueeze later
-            print('input_tensor shape: ', input_tensor[t].unsqueeze(0).shape) 
-            if t == 0: 
-                mask.extend([0] * (2 * self.nlayers + 1))
-            else: 
-                mask.extend([1] * 2 * self.nlayers + [0])
-            # LSTM expects (1, batch_size, input_dim) for a single time step
-            x_t = input_tensor[t].unsqueeze(0)  
-            # One-step forward
-            out, (h, c) = self.rnn(x_t, (h, c))
-
-            # out: (1, batch_size, hidden_dim)
-            # h, c: (nlayers, batch_size, hidden_dim)
-
-        data = torch.cat(data, dim=0)
-        print('data shape: ', data.shape)
-        mask = torch.tensor(mask[1:])  # skip the very first element
-        print('mask shape: ', mask)
-        print('data shape: ', data.shape)
-        if data.shape != (seq_len*(2*self.nlayers + 1), batch_size, self.nhid):
-            print("data shape: ", data.shape)
-            print("expected shape: ", (seq_len*(2*self.nlayers + 1), batch_size, self.nhid))
-            raise ValueError("Shape mismatch in data tensor")
-        if mask.shape[0] != (seq_len*(2*self.nlayers + 1) - 1):
-            print("mask shape: ", mask.shape)
-            print("expected shape: ", (seq_len*(2*self.nlayers + 1) - 1))
-            raise ValueError("Shape mismatch in mask tensor")
-        # Return everything
-        # all_hidden_states can be kept as a tuple for convenience: (all_h, all_c)
-        return data, mask
 
 # Temporarily leave PositionalEncoding module here. Will be moved somewhere else.
 class PositionalEncoding(nn.Module):
@@ -380,40 +256,5 @@ class MultiLayerElmanRNN(nn.Module):
 
         return all_states
 
-if __name__ == '__main__': 
-    # number of tokens, dim input, dim hidden, number of layers, dropout
-    seq_len = 7
-    batch_size = 32
-    input_dim = 10
-    hidden_dim = 10
-    num_layers = 2
-    num_tokens = 100
-    
-    rnn_type = 'LSTM'
-    #rnn_type = 'RNN_TANH'
-    #model = RNNModel('RNN_TANH', num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
-    model = RNNModel(rnn_type, num_tokens, input_dim, hidden_dim, num_layers, dropout=0.5, tie_weights=False)
-    model.init_weights()
-    model.eval()
-
-    #input is of dimension (seq_len, batch, input_dim)
-    input_tensor = torch.randn(seq_len, batch_size, input_dim)
-    #outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
-    outputs, all_hidden_states, data, mask = model.collect_hidden_states_LSTM(input_tensor, model.init_hidden(batch_size))
-
-    #print("all_hidden_states shape: ", all_hidden_states.shape)
-    #print('all_hidden_states: ', all_hidden_states)
-    #print('data: ', data)
-    print('data shape: ', data.shape)
-    print('mask: ', mask)
-
-    #f = 'saved_models/model.pth'
-    #torch.save(model, f)
-    #model = torch.load(f, weights_only=False)
-    #model.eval()
-    #outputs, all_hidden_states, data, mask = model.collect_hidden_states_RNN(input_tensor, model.init_hidden(batch_size))
-    
-    #print('data shape: ', data.shape)
-    #print('saved then output mask: ', mask)
 
 
