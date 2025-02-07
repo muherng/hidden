@@ -1,8 +1,3 @@
-hidden_states/
-vector_gpt_trainer/
-plots/
-results/
-
 # IGNORE EVERYTHING inside folder
 logs/**
 # BUT ALLOW .gitkeep in folder
@@ -19,3 +14,7 @@ results/**
 # IGNORE EVERYTHING inside folder
 hidden_states/**
 !hidden_states/.gitkeep
+
+# IGNORE EVERYTHING inside folder
+vector_gpt_trainer/**
+!vector_gpt_trainer/.gitkeep
