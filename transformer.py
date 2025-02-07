@@ -13,7 +13,7 @@ from transformers.optimization import AdamW, get_scheduler
 from sklearn.model_selection import train_test_split
 
 #synthetic dataset imports
-from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, RNN_TANH_Dataset, RNN_Dataset, LSTM_Dataset
+from synthetic import RandomVectorDataset, FixedRotationDataset, LinearDynamicsDataset, LSTM_Dataset
 import argparse
 import os
 
@@ -314,6 +314,7 @@ class VectorGPTTrainer(Trainer):
             plt.legend()
             plt.ylim(0.0, 1000)
             plt.savefig(f"./plots/perplexity_plot_{timestamp}.png")
+            plt.close()
         else:
             print("Perplexity file not found at", perplex_file)
         #return {f"{metric_key_prefix}_loss": mean_loss}

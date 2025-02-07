@@ -4,6 +4,13 @@ Command for training an LSTM on wikitext-2
 python train.py --cuda --epochs 20           # Train a LSTM on Wikitext-2 with CUDA.
 ```
 
+Once the LSTM is finished training.  To run the Transformer that learns to predict its hidden states and outputs run 
+
+```bash 
+python transformer.py --num_samples 500000           # Train transformer on the hidden states and outputs of LSTM.
+```
+
+
 The model uses the `nn.RNN` module 
 
 During training, if a keyboard interrupt (Ctrl-C) is received, training is stopped and the current model is evaluated against the test dataset.
