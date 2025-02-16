@@ -17,6 +17,7 @@ from transformers import (
     TrainingArguments,
     Trainer,
     set_seed,
+    TrainerCallback
 )
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
@@ -127,17 +128,15 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
 
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor, labels: torch.LongTensor = None):
         batch_size, seq_len = input_ids.shape
-        # For text tokens, perform the standard embedding lookup.
+        # For text tokens, use the learned embedding.
         text_embeddings = self.token_embedding(input_ids.clamp(min=0))
-        # For s tokens, use the fixed continuous s token vector.
-        # Note: we assume self.s_token is already in the hidden space.
+        # For s tokens, use the fixed continuous s token vector (assumed to be in the same hidden space).
         s_token_vector = self.s_token.unsqueeze(0).unsqueeze(0).expand(batch_size, seq_len, self.hidden_dim)
-        # Choose embeddings based on s_mask.
+        # Use s_token_vector wherever s_mask is True.
         embeddings = torch.where(s_mask.unsqueeze(-1), s_token_vector, text_embeddings)
         
         # Add positional embeddings.
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device).unsqueeze(0).expand(batch_size, seq_len)
         hidden_states = embeddings + self.position_embedding(position_ids)
         
         # Pass through transformer blocks.
@@ -145,19 +144,20 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             hidden_states = block(hidden_states, use_cache=False)[0]
         hidden_states = self.ln_f(hidden_states)
         
-        # Compute logits.
         logits = self.decoder(hidden_states)
         
-        # If labels are provided, compute loss.
         if labels is not None:
+            # Perform next-token prediction by shifting logits and labels.
+            shift_logits = logits[:, :-1, :]
+            shift_labels = labels[:, 1:]
             loss = F.cross_entropy(
-                logits.view(-1, self.vocab_size),
-                labels.view(-1),
+                shift_logits.reshape(-1, self.vocab_size),
+                shift_labels.reshape(-1),
                 ignore_index=-100
             )
             return CausalLMOutput(loss=loss, logits=logits)
-        else:
-            return CausalLMOutput(logits=logits)
+        return CausalLMOutput(logits=logits)
+
 
 # -----------------------------------------------------------------------------
 # 3. Collate Function
@@ -204,6 +204,45 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=2)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=2)
 
+    class PrintLossCallback(TrainerCallback):
+        def __init__(self):
+            self.best_training_loss = float('inf')
+            self.best_eval_loss = float('inf')
+            self.last_eval_loss = None
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs is None:
+                return
+
+            # Update training loss info.
+            if "loss" in logs:
+                current_loss = logs["loss"]
+                if current_loss < self.best_training_loss:
+                    self.best_training_loss = current_loss
+                training_perplexity = math.exp(current_loss) if current_loss < 100 else float('inf')
+            else:
+                current_loss = None
+                training_perplexity = None
+
+            # Update evaluation loss info only if available.
+            if "eval_loss" in logs:
+                current_eval_loss = logs["eval_loss"]
+                self.last_eval_loss = current_eval_loss
+                if current_eval_loss < self.best_eval_loss:
+                    self.best_eval_loss = current_eval_loss
+                eval_perplexity = math.exp(current_eval_loss) if current_eval_loss < 100 else float('inf')
+            else:
+                # If eval_loss is not in logs, use the last known eval loss.
+                current_eval_loss = self.last_eval_loss
+                eval_perplexity = math.exp(current_eval_loss) if current_eval_loss is not None and current_eval_loss < 100 else float('inf')
+
+            # Build the print string.
+            out_str = f"Step {state.global_step}: "
+            if current_loss is not None:
+                out_str += f"Training Loss: {current_loss:.4f} (Best: {self.best_training_loss:.4f}, Perp: {training_perplexity:.4f})"
+            if current_eval_loss is not None:
+                out_str += f" | Eval Loss: {current_eval_loss:.4f} (Best: {self.best_eval_loss:.4f}, Perp: {eval_perplexity:.4f})"
+            print(out_str)
     # Prepare model configuration.
     config = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
@@ -242,6 +281,8 @@ def main():
         data_collator=collate_fn,
         tokenizer=tokenizer,
     )
+
+    trainer.add_callback(PrintLossCallback())
     trainer.train()
 
 if __name__ == "__main__":
