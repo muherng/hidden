@@ -316,10 +316,10 @@ def main():
     config1 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,
-        n_layer=4,
+        n_embd=256,       # You could also reduce this if necessary.
+        n_layer=4,        # Or reduce the number of layers.
         n_head=4,
-        dropout=0.1,
+        dropout=0.3,      # Increase dropout here.
         s_token_learnable=False,
     )
     module1 = NoExtraLayerSTokenGPTModel(config1)
@@ -327,10 +327,10 @@ def main():
     config2 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,
-        n_layer=4,
+        n_embd=256,       # You could also reduce this if necessary.
+        n_layer=4,        # Or reduce the number of layers.
         n_head=4,
-        dropout=0.1,
+        dropout=0.3,      # Increase dropout here.
         s_token_learnable=False,
     )
     module2 = NoExtraLayerSTokenGPTModel(config2)
@@ -347,9 +347,9 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        warmup_steps=500,
-        weight_decay=0.01,
+        learning_rate=5e-5,           # Lower learning rate.
+        warmup_steps=1000,            # Increase warmup steps.
+        weight_decay=0.1,             # Increase weight decay.
         fp16=False,
         seed=args.seed,
         lr_scheduler_type="cosine",
