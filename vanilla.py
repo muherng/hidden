@@ -16,6 +16,7 @@ from transformers import (
     GPT2Config,
     TrainingArguments,
     Trainer,
+    TrainerCallback,
     set_seed,
 )
 import datasets
@@ -60,6 +61,43 @@ def collate_fn(batch):
     input_ids = torch.stack([item["input_ids"] for item in batch])
     labels = torch.stack([item["labels"] for item in batch])
     return {"input_ids": input_ids, "labels": labels}
+
+class PrintLossCallback(TrainerCallback):
+    def __init__(self):
+        self.best_training_loss = float('inf')
+        self.best_eval_loss = float('inf')
+        self.last_eval_loss = None
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+        if "loss" in logs:
+            current_loss = logs["loss"]
+            if isinstance(current_loss, torch.Tensor):
+                current_loss = current_loss.item()
+            if current_loss < self.best_training_loss:
+                self.best_training_loss = current_loss
+            training_perplexity = math.exp(current_loss) if current_loss < 100 else float('inf')
+        else:
+            current_loss = None
+            training_perplexity = None
+        if "eval_loss" in logs:
+            current_eval_loss = logs["eval_loss"]
+            if isinstance(current_eval_loss, torch.Tensor):
+                current_eval_loss = current_eval_loss.item()
+            self.last_eval_loss = current_eval_loss
+            if current_eval_loss < self.best_eval_loss:
+                self.best_eval_loss = current_eval_loss
+            eval_perplexity = math.exp(current_eval_loss) if current_eval_loss < 100 else float('inf')
+        else:
+            current_eval_loss = self.last_eval_loss
+            eval_perplexity = math.exp(current_eval_loss) if current_eval_loss is not None and current_eval_loss < 100 else float('inf')
+        out_str = f"Step {state.global_step}: "
+        if current_loss is not None:
+            out_str += f"Training Loss: {current_loss:.4f} (Best: {self.best_training_loss:.4f}, Perp: {training_perplexity:.4f})"
+        if current_eval_loss is not None:
+            out_str += f" | Eval Loss: {current_eval_loss:.4f} (Best: {self.best_eval_loss:.4f}, Perp: {eval_perplexity:.4f})"
+        print(out_str)
 
 # -----------------------------------------------------------------------------
 # 2. Training Script
@@ -107,6 +145,7 @@ def main():
         n_embd=256,
         n_layer=4,
         n_head=4,
+        dropout=0.3
         # You can adjust additional hyperparameters here if needed.
     )
     model = GPT2LMHeadModel(config)
@@ -123,13 +162,14 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        warmup_steps=500,
-        weight_decay=0.01,
+        learning_rate=5e-5,           # Lower learning rate.
+        warmup_steps=1000,            # Increase warmup steps.
+        weight_decay=0.1,             # Increase weight decay.
         fp16=False,
-        lr_scheduler_type="cosine",
         seed=args.seed,
-        report_to="tensorboard"
+        lr_scheduler_type="cosine",
+        report_to="tensorboard",
+        save_total_limit=2
     )
 
     trainer = Trainer(
@@ -140,8 +180,26 @@ def main():
         data_collator=collate_fn,
         tokenizer=tokenizer
     )
-    
+    trainer.add_callback(PrintLossCallback)
     trainer.train()
 
 if __name__ == "__main__":
     main()
+
+"""     training_args = TrainingArguments(
+        output_dir=output_dir,
+        evaluation_strategy="steps",
+        eval_steps=200,
+        save_steps=500,
+        logging_steps=100,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        num_train_epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        warmup_steps=500,
+        weight_decay=0.01,
+        fp16=False,
+        lr_scheduler_type="cosine",
+        seed=args.seed,
+        report_to="tensorboard"
+    ) """
