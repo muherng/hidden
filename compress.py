@@ -148,50 +148,73 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
 # 3. Helper: Compute Custom Attention Mask
 # -----------------------------------------------------------------------------
 
-def compute_custom_attention_mask(s_mask):
+def compute_custom_attention_mask(s_mask, mode='default', window=None):
     """
-    Given s_mask of shape (B, L) (bool tensor), returns a tensor of shape (B, 1, L, L)
-    to be added to the attention scores in module2 so that for each position i,
-    only positions from the most recent s token (inclusive) to i-1 are allowed.
-    We use a large negative number (-1e9) for disallowed positions.
+    Computes an attention mask of shape (B, 1, L, L).
+
+    Args:
+        s_mask (torch.BoolTensor): Boolean tensor of shape (B, L). For mode='default'
+            this is used to determine the most recent s token per position. In sliding mode,
+            s_mask is ignored.
+        mode (str): Either 'default' (the original behavior) or 'sliding'.
+        window (int, optional): In sliding mode, each token i can attend only to tokens 
+            in the range where 0 <= (i - j) < window (i.e. tokens from i-window+1 to i, inclusive).
+            If None in sliding mode, defaults to full causal attention (i.e. window=L).
+
+    Returns:
+        torch.Tensor: An attention mask tensor of shape (B, 1, L, L) with 0 for allowed
+            positions and -1e9 for disallowed positions.
     """
     B, L = s_mask.size()
     device = s_mask.device
-    # Create an index tensor for positions.
-    indices = torch.arange(L, device=device).unsqueeze(0).expand(B, L)  # (B, L)
-    # For each sample, compute the index of the most recent s token for each position.
-    # Set positions with no s token to 0.
-    s_mask_idx = torch.where(s_mask, indices, torch.tensor(-1, device=device))
-    # Use cummax to get the last s token index at each position.
-    _, last_s = torch.cummax(s_mask_idx, dim=1)  # (B, L)
-    # Create matrices of indices: row indices for i, col indices for j.
-    i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)  # (L, L)
-    j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)  # (L, L)
-    # For each row i, get the allowed minimum index from last_s.
-    # We need to expand last_s to (B, L, 1).
-    last_s_expanded = last_s.unsqueeze(2)  # (B, L, 1)
-    # Now, for each sample b and for each row i and column j, allowed if:
-    # j < i (causal) and j >= last_s[b, i].
-    # Compute the causal mask: allowed if j < i.
-    causal = (j_indices < i_indices).to(device)  # (L, L), bool
-    # Expand causal to (B, L, L)
-    causal = causal.unsqueeze(0).expand(B, L, L)
-    # For each sample, create allowed mask: j_indices >= last_s (broadcasted along dimension 1)
-    allowed = (j_indices.unsqueeze(0).expand(B, L, L) >= last_s_expanded)
-    # Final allowed mask: allowed if both conditions hold.
-    final_allowed = causal & allowed
-    # Set mask: 0 for allowed positions, -1e9 for disallowed.
-    attn_mask = torch.where(final_allowed, torch.tensor(0.0, device=device), torch.tensor(-1e9, device=device))
-    # Expand to shape (B, 1, L, L)
-    attn_mask = attn_mask.unsqueeze(1)
-    return attn_mask
+
+    if mode == 'sliding':
+        # If no window is specified, default to full causal attention.
+        if window is None:
+            window = L
+        # Create matrices of position indices.
+        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
+        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
+        # Compute difference (i - j). Self attention is allowed when diff == 0.
+        diff = i_indices - j_indices  # shape: (L, L)
+        # Allowed if 0 <= diff < window.
+        allowed = (diff >= 0) & (diff < window)
+        attn_mask = torch.where(allowed, torch.tensor(0.0, device=device),
+                                torch.tensor(-1e9, device=device))
+        # Expand to (B, 1, L, L)
+        attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
+        return attn_mask
+
+    elif mode == 'default':
+        # Original implementation based on s_mask.
+        indices = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
+        # Mark positions where s_mask is True; use -1 for others.
+        s_mask_idx = torch.where(s_mask, indices, torch.tensor(-1, device=device))
+        # Compute the most recent s token index at each position using cummax.
+        _, last_s = torch.cummax(s_mask_idx, dim=1)
+        # Create matrices of indices.
+        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
+        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
+        last_s_expanded = last_s.unsqueeze(2)  # Shape (B, L, 1)
+        causal = (j_indices < i_indices).to(device).unsqueeze(0).expand(B, L, L)
+        allowed = (j_indices.unsqueeze(0).expand(B, L, L) >= last_s_expanded)
+        final_allowed = causal & allowed
+        attn_mask = torch.where(final_allowed, torch.tensor(0.0, device=device),
+                                torch.tensor(-1e9, device=device))
+        attn_mask = attn_mask.unsqueeze(1)
+        return attn_mask
+
+    else:
+        raise ValueError("Invalid mode for compute_custom_attention_mask. "
+                         "Choose 'default' or 'sliding'.")
+
 
 # -----------------------------------------------------------------------------
 # 4. Composite Two-Stage Model
 # -----------------------------------------------------------------------------
 
 class TwoStageModel(nn.Module):
-    def __init__(self, module1: NoExtraLayerSTokenGPTModel, module2: NoExtraLayerSTokenGPTModel):
+    def __init__(self, module1: NoExtraLayerSTokenGPTModel, module2: NoExtraLayerSTokenGPTModel, window=None):
         """
         module1 processes input p and outputs p' (with continuous s' tokens).
         module2 takes p'' as input where s token positions are replaced with s' tokens from module1.
@@ -199,12 +222,13 @@ class TwoStageModel(nn.Module):
         super().__init__()
         self.module1 = module1
         self.module2 = module2
+        self.window = window
 
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor, labels: torch.LongTensor = None):
         # Module1 pass: get hidden states.
         out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True)
         # Compute custom attention mask from s_mask.
-        custom_attn_mask = compute_custom_attention_mask(s_mask)
+        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='sliding', window=self.window)
         # Module2 pass: use module1's hidden states to override s token positions, and pass the custom attention mask.
         out2 = self.module2(input_ids=input_ids, s_mask=s_mask, override_s=out1.hidden_states, labels=labels,
                             attention_mask=custom_attn_mask)
@@ -285,6 +309,8 @@ def main():
                         help='Number of text tokens per sample (before inserting s tokens).')
     parser.add_argument('--k', type=int, default=3,
                         help='Insert an s token every k text tokens.')
+    parser.add_argument('--window', type=int, default=4,
+                        help='length of sliding causal attention window for module2.')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
     parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
@@ -335,7 +361,7 @@ def main():
     )
     module2 = NoExtraLayerSTokenGPTModel(config2)
     # Build composite two-stage model.
-    composite_model = TwoStageModel(module1, module2)
+    composite_model = TwoStageModel(module1, module2, window=args.window)
     composite_model.to(device)
 
     training_args = TrainingArguments(
@@ -347,9 +373,9 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        learning_rate=5e-5,           # Lower learning rate.
-        warmup_steps=1000,            # Increase warmup steps.
-        weight_decay=0.1,             # Increase weight decay.
+        learning_rate=1e-4,           # Lower learning rate.
+        warmup_steps=500,            # Increase warmup steps.
+        weight_decay=0.01,             # Increase weight decay.
         fp16=False,
         seed=args.seed,
         lr_scheduler_type="cosine",
