@@ -310,7 +310,7 @@ def main():
     )
     parser.add_argument('--seq_len', type=int, default=512,
                         help='Number of text tokens per sample (before inserting s tokens).')
-    parser.add_argument('--mode', type=str, default='two_stage',
+    parser.add_argument('--mode', type=str, default='one_stage',
                         help='either two module training or just single module(2) options [one_stage,two_stage]')
     parser.add_argument('--text_run', type=int, default=9,
                         help='Insert an s token every text_run text tokens.')
@@ -349,9 +349,9 @@ def main():
     valid_dataset = TextWithSTokenDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len, text_run=args.text_run, state_run=args.state_run)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              collate_fn=collate_fn, num_workers=2)
+                              collate_fn=collate_fn, num_workers=8)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False,
-                              collate_fn=collate_fn, num_workers=2)
+                              collate_fn=collate_fn, num_workers=8)
 
     # Instantiate module1.
     config1 = NoExtraLayerSTokenGPTConfig(
@@ -394,7 +394,8 @@ def main():
         fp16=False,
         seed=args.seed,
         lr_scheduler_type="cosine",
-        report_to="tensorboard"
+        report_to="tensorboard",
+        max_grad_norm=1.0
     )
 
     trainer = CustomTrainer(
