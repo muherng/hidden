@@ -42,7 +42,7 @@ class TextWithSTokenDataset(Dataset):
         self.text_run = text_run
         self.state_run = state_run 
 
-        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
         text = " ".join(self.data["text"])
         self.tokenizer.model_max_length = int(1e7)
         self.token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -308,19 +308,29 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a two-stage transformer model: module1 and module2 with custom attention masking.'
     )
-    parser.add_argument('--seq_len', type=int, default=128,
+    parser.add_argument('--seq_len', type=int, default=512,
                         help='Number of text tokens per sample (before inserting s tokens).')
-    parser.add_argument('--text_run', type=int, default=3,
+    parser.add_argument('--mode', type=str, default='two_stage',
+                        help='either two module training or just single module(2) options [one_stage,two_stage]')
+    parser.add_argument('--text_run', type=int, default=9,
                         help='Insert an s token every text_run text tokens.')
     parser.add_argument('--state_run', type=int, default=1,
                         help='Insert state_run s tokens every text_run text tokens.')
-    parser.add_argument('--window', type=int, default=4,
+    parser.add_argument('--window', type=int, default=10,
                         help='length of sliding causal attention window for module2.')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs.')
-    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
+    parser.add_argument('--hidden', type=int, default=768, help='hidden dimension of both modules.')
+    parser.add_argument('--layers', type=int, default=12, help='number of layers of both modules.')
+    parser.add_argument('--heads', type=int, default=12, help='number of heads of both modules.')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')
+    parser.add_argument('--learning_rate', type=float, default=5e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     args = parser.parse_args()
+    
+    #if mode is one stage, insert 0 state tokens which is equivalent to just running module2
+    if args.mode == 'one_stage': 
+        args.text_run = args.seq_len+1
+        args.state_run = 0
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -347,10 +357,10 @@ def main():
     config1 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,       
-        n_layer=4,        
-        n_head=4,
-        dropout=0.3,      
+        n_embd=args.hidden,       
+        n_layer=args.layers,        
+        n_head=args.heads,
+        dropout=0.1,      
         s_token_learnable=False,
     )
     module1 = NoExtraLayerSTokenGPTModel(config1)
@@ -358,10 +368,10 @@ def main():
     config2 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,       
-        n_layer=4,        
-        n_head=4,
-        dropout=0.3,      
+        n_embd=args.hidden,       
+        n_layer=args.layers,        
+        n_head=args.heads,
+        dropout=0.1,      
         s_token_learnable=False,
     )
     module2 = NoExtraLayerSTokenGPTModel(config2)
@@ -378,9 +388,9 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        learning_rate=1e-4,           # Lower learning rate.
-        warmup_steps=500,            # Increase warmup steps.
-        weight_decay=0.01,             # Increase weight decay.
+        learning_rate=5e-4,          
+        warmup_steps=1000,           
+        weight_decay=0.01,             
         fp16=False,
         seed=args.seed,
         lr_scheduler_type="cosine",
