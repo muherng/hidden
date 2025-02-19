@@ -31,7 +31,7 @@ import datasets
 # -----------------------------------------------------------------------------
 
 class TextWithSTokenDataset(Dataset):
-    def __init__(self, split, tokenizer, seq_len, k):
+    def __init__(self, split, tokenizer, seq_len, text_run, state_run):
         """
         For each contiguous chunk of text tokens (length seq_len), after every k text tokens,
         insert an s token marker (token id -1). Labels are set to the original token for text positions
@@ -39,7 +39,8 @@ class TextWithSTokenDataset(Dataset):
         """
         self.tokenizer = tokenizer
         self.seq_len = seq_len
-        self.k = k
+        self.text_run = text_run
+        self.state_run = state_run 
 
         self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
         text = " ".join(self.data["text"])
@@ -57,16 +58,18 @@ class TextWithSTokenDataset(Dataset):
                 input_ids_list.append(token)
                 s_mask_list.append(False)
                 labels_list.append(token)
-                if (j + 1) % self.k == 0 and (j + 1) < len(a_tokens):
-                    input_ids_list.append(-1)  # marker for s token.
-                    s_mask_list.append(True)
-                    labels_list.append(-100)   # ignore in loss.
+                if (j + 1) % self.text_run == 0 and (j + 1) < len(a_tokens):
+                    for i in range(state_run): 
+                        input_ids_list.append(-1)  # marker for s token.
+                        s_mask_list.append(True)
+                        labels_list.append(-100)   # ignore in loss.
             sample = {
                 "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
                 "s_mask": torch.tensor(s_mask_list, dtype=torch.bool),
                 "labels": torch.tensor(labels_list, dtype=torch.long)
             }
             self.samples.append(sample)
+
     def __len__(self):
         return len(self.samples)
     def __getitem__(self, idx):
@@ -148,7 +151,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
 # 3. Helper: Compute Custom Attention Mask
 # -----------------------------------------------------------------------------
 
-def compute_custom_attention_mask(s_mask, mode='default', window=None):
+def compute_custom_attention_mask(s_mask, mode='sliding', window=None):
     """
     Computes an attention mask of shape (B, 1, L, L).
 
@@ -185,7 +188,7 @@ def compute_custom_attention_mask(s_mask, mode='default', window=None):
         attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
         return attn_mask
 
-    elif mode == 'default':
+    elif mode == 'stagger':
         # Original implementation based on s_mask.
         indices = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
         # Mark positions where s_mask is True; use -1 for others.
@@ -206,7 +209,7 @@ def compute_custom_attention_mask(s_mask, mode='default', window=None):
 
     else:
         raise ValueError("Invalid mode for compute_custom_attention_mask. "
-                         "Choose 'default' or 'sliding'.")
+                         "Choose 'default' or 'stagger'.")
 
 
 # -----------------------------------------------------------------------------
@@ -307,8 +310,10 @@ def main():
     )
     parser.add_argument('--seq_len', type=int, default=128,
                         help='Number of text tokens per sample (before inserting s tokens).')
-    parser.add_argument('--k', type=int, default=3,
-                        help='Insert an s token every k text tokens.')
+    parser.add_argument('--text_run', type=int, default=3,
+                        help='Insert an s token every text_run text tokens.')
+    parser.add_argument('--state_run', type=int, default=1,
+                        help='Insert state_run s tokens every text_run text tokens.')
     parser.add_argument('--window', type=int, default=4,
                         help='length of sliding causal attention window for module2.')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
@@ -322,7 +327,7 @@ def main():
     print("Device:", device)
     # Create a unique output directory using a timestamp and input parameter info.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("./two_stage_model", f"seq{args.seq_len}_k{args.k}_{timestamp}")
+    output_dir = os.path.join("./two_stage_model", f"seq{args.seq_len}_k{args.text_run}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
 
     # Load tokenizer.
@@ -330,8 +335,8 @@ def main():
     tokenizer.model_max_length = int(1e7)
 
     # Create datasets.
-    train_dataset = TextWithSTokenDataset(split="train", tokenizer=tokenizer, seq_len=args.seq_len, k=args.k)
-    valid_dataset = TextWithSTokenDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len, k=args.k)
+    train_dataset = TextWithSTokenDataset(split="train", tokenizer=tokenizer, seq_len=args.seq_len, text_run=args.text_run, state_run=args.state_run)
+    valid_dataset = TextWithSTokenDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len, text_run=args.text_run, state_run=args.state_run)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate_fn, num_workers=2)
@@ -342,10 +347,10 @@ def main():
     config1 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,       # You could also reduce this if necessary.
-        n_layer=4,        # Or reduce the number of layers.
+        n_embd=256,       
+        n_layer=4,        
         n_head=4,
-        dropout=0.3,      # Increase dropout here.
+        dropout=0.3,      
         s_token_learnable=False,
     )
     module1 = NoExtraLayerSTokenGPTModel(config1)
@@ -353,10 +358,10 @@ def main():
     config2 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,       # You could also reduce this if necessary.
-        n_layer=4,        # Or reduce the number of layers.
+        n_embd=256,       
+        n_layer=4,        
         n_head=4,
-        dropout=0.3,      # Increase dropout here.
+        dropout=0.3,      
         s_token_learnable=False,
     )
     module2 = NoExtraLayerSTokenGPTModel(config2)
