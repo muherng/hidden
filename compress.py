@@ -33,36 +33,52 @@ import datasets
 class TextWithSTokenDataset(Dataset):
     def __init__(self, split, tokenizer, seq_len, text_run, state_run):
         """
-        For each contiguous chunk of text tokens (length seq_len), after every k text tokens,
+        For each contiguous chunk of tokenized text (length seq_len), after every k text tokens,
         insert an s token marker (token id -1). Labels are set to the original token for text positions
         and -100 for s token positions.
         """
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.text_run = text_run
-        self.state_run = state_run 
+        self.state_run = state_run
 
+        # Load the dataset (using WikiText-103 for a larger corpus)
         self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
-        text = " ".join(self.data["text"])
-        self.tokenizer.model_max_length = int(1e7)
-        self.token_ids = tokenizer.encode(text, add_special_tokens=False)
+
+        # Pre-tokenize the dataset using .map() with batched processing and multiple processes.
+        def tokenize_fn(examples):
+            # Tokenize a batch of texts; note that 'text' is a key in each example.
+            return tokenizer(examples["text"], add_special_tokens=False)
+        
+        self.data = self.data.map(
+            tokenize_fn, 
+            batched=True,         # Process batches of examples for efficiency.
+            num_proc=4,           # Adjust number of processes based on your CPU.
+            remove_columns=["text"]  # Remove the raw text after tokenization.
+        )
+
+        # Flatten the list of token ids from all examples.
+        token_ids_list = self.data["input_ids"]
+        self.token_ids = [token for sublist in token_ids_list for token in sublist]
         self.vocab_size = tokenizer.vocab_size
 
+        # Create samples by splitting token_ids into chunks of seq_len tokens,
+        # interleaving s tokens as defined by text_run and state_run.
         self.samples = []
         for i in range(0, len(self.token_ids) - seq_len, seq_len):
             a_tokens = self.token_ids[i:i + seq_len]
-            input_ids_list = []  # For text tokens: token id; for s tokens: -1.
-            s_mask_list = []     # True if position is an s token.
-            labels_list = []     # For text tokens: token id; for s tokens: -100.
+            input_ids_list = []
+            s_mask_list = []
+            labels_list = []
             for j, token in enumerate(a_tokens):
                 input_ids_list.append(token)
                 s_mask_list.append(False)
                 labels_list.append(token)
                 if (j + 1) % self.text_run == 0 and (j + 1) < len(a_tokens):
-                    for i in range(state_run): 
-                        input_ids_list.append(-1)  # marker for s token.
+                    for _ in range(state_run):
+                        input_ids_list.append(-1)  # Marker for s token.
                         s_mask_list.append(True)
-                        labels_list.append(-100)   # ignore in loss.
+                        labels_list.append(-100)   # Ignore index for loss.
             sample = {
                 "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
                 "s_mask": torch.tensor(s_mask_list, dtype=torch.bool),
@@ -72,8 +88,11 @@ class TextWithSTokenDataset(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
     def __getitem__(self, idx):
         return self.samples[idx]
+
+
 
 # -----------------------------------------------------------------------------
 # 2. No-Extra-Layer S Token GPT Model (Module)
@@ -316,7 +335,7 @@ def main():
                         help='Insert an s token every text_run text tokens.')
     parser.add_argument('--state_run', type=int, default=1,
                         help='Insert state_run s tokens every text_run text tokens.')
-    parser.add_argument('--window', type=int, default=10,
+    parser.add_argument('--window', type=int, default=8,
                         help='length of sliding causal attention window for module2.')
     parser.add_argument('--hidden', type=int, default=768, help='hidden dimension of both modules.')
     parser.add_argument('--layers', type=int, default=12, help='number of layers of both modules.')
