@@ -164,6 +164,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                                      shift_labels.reshape(-1),
                                      ignore_index=-100)
             output.loss = loss
+            #TODO: code for adding s token loss.  
         return output
 
 # -----------------------------------------------------------------------------
@@ -224,6 +225,23 @@ def compute_custom_attention_mask(s_mask, mode='sliding', window=None):
         attn_mask = torch.where(final_allowed, torch.tensor(0.0, device=device),
                                 torch.tensor(-1e9, device=device))
         attn_mask = attn_mask.unsqueeze(1)
+        return attn_mask 
+    elif mode == 'ladder':
+        # Ladder mode: each token i attends to tokens from the start of its block to i.
+        if window is None:
+            raise ValueError("Window parameter must be specified for ladder mode")
+        # Create matrices of position indices.
+        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
+        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
+        # Compute the block start for each token i.
+        # For token i, block_start = floor(i/window) * window.
+        block_start = (torch.arange(L, device=device) // window) * window  # shape: (L)
+        # For each row i, allow positions j where block_start[i] <= j <= i.
+        allowed = (j_indices >= block_start.unsqueeze(1)) & (j_indices <= i_indices)
+        attn_mask = torch.where(allowed, torch.tensor(0.0, device=device),
+                                torch.tensor(-1e9, device=device))
+        # Expand to (B, 1, L, L)
+        attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
         return attn_mask
     else:
         raise ValueError("Invalid mode for compute_custom_attention_mask. "
@@ -249,10 +267,11 @@ class TwoStageModel(nn.Module):
         # Module1 pass: get hidden states.
         out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True)
         # Compute custom attention mask from s_mask.
-        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='stagger', window=self.window)
+        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='ladder', window=self.window)
         # Module2 pass: use module1's hidden states to override s token positions, and pass the custom attention mask.
         out2 = self.module2(input_ids=input_ids, s_mask=s_mask, override_s=out1.hidden_states, labels=labels,
                             attention_mask=custom_attn_mask)
+        
         return out2
 
 # -----------------------------------------------------------------------------
