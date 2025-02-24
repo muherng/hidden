@@ -225,7 +225,6 @@ def compute_custom_attention_mask(s_mask, mode='sliding', window=None):
                                 torch.tensor(-1e9, device=device))
         attn_mask = attn_mask.unsqueeze(1)
         return attn_mask
-
     else:
         raise ValueError("Invalid mode for compute_custom_attention_mask. "
                          "Choose 'default' or 'stagger'.")
@@ -250,7 +249,7 @@ class TwoStageModel(nn.Module):
         # Module1 pass: get hidden states.
         out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True)
         # Compute custom attention mask from s_mask.
-        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='sliding', window=self.window)
+        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='stagger', window=self.window)
         # Module2 pass: use module1's hidden states to override s token positions, and pass the custom attention mask.
         out2 = self.module2(input_ids=input_ids, s_mask=s_mask, override_s=out1.hidden_states, labels=labels,
                             attention_mask=custom_attn_mask)
