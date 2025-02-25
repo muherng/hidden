@@ -135,7 +135,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
 
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor,
                 labels: torch.LongTensor = None, return_hidden: bool = False,
-                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None):
+                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss=False):
         """
         If override_s is provided, use that for positions where s_mask is True.
         If attention_mask is provided, pass it to each transformer block.
@@ -167,15 +167,21 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             # Compute MSE loss between embed_copy and hidden_states for positions where shift_labels == -100.
             #embed_copy is the target labels
             #hidden_states is the predicted labels
-            mask = (shift_labels == -100).unsqueeze(-1)  # Shape: (batch, seq_len-1, 1)
-            if mask.any():
-                mask_expanded = mask.expand(-1, -1, self.hidden_dim)
-                mse_loss = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:,:-1][mask_expanded])
-            else:
-                mse_loss = torch.tensor(0.0, device=hidden_states.device)
-            regular = 0.5
-            output.loss = (1 - regular)*ce_loss + regular*mse_loss 
-            #output.loss = loss
+            if mse_loss: 
+                mask = (shift_labels == -100).unsqueeze(-1)  # Shape: (batch, seq_len-1, 1)
+                if mask.any():
+                    mask_expanded = mask.expand(-1, -1, self.hidden_dim)
+                    mse_loss = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:,:-1][mask_expanded])
+                else:
+                    mse_loss = torch.tensor(0.0, device=hidden_states.device)
+                regular = 0.5
+                output.ce_loss = ce_loss
+                output.mse_loss = mse_loss
+                output.loss = (1 - regular)*ce_loss + regular*mse_loss 
+            else: 
+                output.ce_loss = ce_loss
+                output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
+                output.loss = ce_loss
         return output
 
 # -----------------------------------------------------------------------------
@@ -276,12 +282,12 @@ class TwoStageModel(nn.Module):
 
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor, labels: torch.LongTensor = None):
         # Module1 pass: get hidden states.
-        out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True)
+        out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True, mse_loss=False)
         # Compute custom attention mask from s_mask.
         custom_attn_mask = compute_custom_attention_mask(s_mask, mode='ladder', window=self.window)
         # Module2 pass: use module1's hidden states to override s token positions, and pass the custom attention mask.
         out2 = self.module2(input_ids=input_ids, s_mask=s_mask, override_s=out1.hidden_states, labels=labels,
-                            attention_mask=custom_attn_mask)
+                            attention_mask=custom_attn_mask, mse_loss=True)
         
         return out2
 
