@@ -161,7 +161,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         if labels is not None and not return_hidden:
             shift_logits = logits[:, :-1, :]
             shift_labels = labels[:, 1:]
-            loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
+            ce_loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
                                      shift_labels.reshape(-1),
                                      ignore_index=-100)
             # Compute MSE loss between embed_copy and hidden_states for positions where shift_labels == -100.
@@ -169,11 +169,13 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             #hidden_states is the predicted labels
             mask = (shift_labels == -100).unsqueeze(-1)  # Shape: (batch, seq_len-1, 1)
             if mask.any():
-                mse_loss = F.mse_loss(embed_copy[:, 1:][mask], hidden_states[:,:-1][mask])
+                mask_expanded = mask.expand(-1, -1, self.hidden_dim)
+                mse_loss = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:,:-1][mask_expanded])
             else:
                 mse_loss = torch.tensor(0.0, device=hidden_states.device)
-            output.loss = ce_loss + mse_loss 
-            output.loss = loss
+            regular = 0.5
+            output.loss = (1 - regular)*ce_loss + regular*mse_loss 
+            #output.loss = loss
         return output
 
 # -----------------------------------------------------------------------------
