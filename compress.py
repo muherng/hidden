@@ -149,6 +149,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         embeddings = torch.where(s_mask.unsqueeze(-1), s_token_vector, text_embeddings)
         position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device).unsqueeze(0).expand(batch_size, seq_len)
         hidden_states = embeddings + self.position_embedding(position_ids)
+        embed_copy = embeddings.clone()  # Copy with gradients tracked.
         # Pass through transformer blocks with the custom attention mask if provided.
         for block in self.h:
             hidden_states = block(hidden_states, use_cache=False, attention_mask=attention_mask)[0]
@@ -163,8 +164,16 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
                                      shift_labels.reshape(-1),
                                      ignore_index=-100)
+            # Compute MSE loss between embed_copy and hidden_states for positions where shift_labels == -100.
+            #embed_copy is the target labels
+            #hidden_states is the predicted labels
+            mask = (shift_labels == -100).unsqueeze(-1)  # Shape: (batch, seq_len-1, 1)
+            if mask.any():
+                mse_loss = F.mse_loss(embed_copy[:, 1:][mask], hidden_states[:,:-1][mask])
+            else:
+                mse_loss = torch.tensor(0.0, device=hidden_states.device)
+            output.loss = ce_loss + mse_loss 
             output.loss = loss
-            #TODO: code for adding s token loss.  
         return output
 
 # -----------------------------------------------------------------------------
