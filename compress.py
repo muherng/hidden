@@ -43,7 +43,8 @@ class TextWithSTokenDataset(Dataset):
         self.state_run = state_run
 
         # Load the dataset (using WikiText-103 for a larger corpus)
-        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
 
         # Pre-tokenize the dataset using .map() with batched processing and multiple processes.
         def tokenize_fn(examples):
@@ -314,6 +315,8 @@ class PrintLossCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None:
             return
+
+        # Get main training loss and compute perplexity.
         if "loss" in logs:
             current_loss = logs["loss"]
             if isinstance(current_loss, torch.Tensor):
@@ -324,6 +327,8 @@ class PrintLossCallback(TrainerCallback):
         else:
             current_loss = None
             training_perplexity = None
+
+        # Get evaluation loss and compute perplexity.
         if "eval_loss" in logs:
             current_eval_loss = logs["eval_loss"]
             if isinstance(current_eval_loss, torch.Tensor):
@@ -335,11 +340,25 @@ class PrintLossCallback(TrainerCallback):
         else:
             current_eval_loss = self.last_eval_loss
             eval_perplexity = math.exp(current_eval_loss) if current_eval_loss is not None and current_eval_loss < 100 else float('inf')
+        
+        # Get ce_loss and mse_loss if available.
+        ce_loss = logs.get("ce_loss", None)
+        if isinstance(ce_loss, torch.Tensor):
+            ce_loss = ce_loss.item()
+        mse_loss = logs.get("mse_loss", None)
+        if isinstance(mse_loss, torch.Tensor):
+            mse_loss = mse_loss.item()
+
         out_str = f"Step {state.global_step}: "
         if current_loss is not None:
-            out_str += f"Training Loss: {current_loss:.4f} (Best: {self.best_training_loss:.4f}, Perp: {training_perplexity:.4f})"
+            out_str += f"Loss: {current_loss:.4f} "
         if current_eval_loss is not None:
-            out_str += f" | Eval Loss: {current_eval_loss:.4f} (Best: {self.best_eval_loss:.4f}, Perp: {eval_perplexity:.4f})"
+            out_str += f"| Eval Loss: {current_eval_loss:.4f}"
+        if ce_loss is not None:
+            out_str += f"| CE Loss: {ce_loss:.4f}, Train PPL: {training_perplexity:.4f} "
+        if mse_loss is not None:
+            out_str += f"| MSE Loss: {mse_loss:.4f} , Eval PPL: {eval_perplexity:.4f}"
+        
         print(out_str)
 
 # -----------------------------------------------------------------------------
@@ -352,7 +371,57 @@ class CustomTrainer(Trainer):
         loss = outputs.loss
         if not torch.is_tensor(loss):
             loss = torch.tensor(loss, device=inputs["input_ids"].device, dtype=torch.float)
-        return (loss, outputs) if return_outputs else loss
+        extra = {}
+        if hasattr(outputs, "ce_loss"):
+            extra["ce_loss"] = outputs.ce_loss
+        if hasattr(outputs, "mse_loss"):
+            extra["mse_loss"] = outputs.mse_loss
+        return (loss, {"loss": loss, **extra})
+
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+        loss, outputs = self.compute_loss(
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
+        if self.args.gradient_accumulation_steps > 1:
+            loss = loss / self.args.gradient_accumulation_steps
+        loss.backward()
+        
+        # Explicitly log extra metrics
+        logs = {"loss": loss.item()}
+        if "ce_loss" in outputs:
+            logs["ce_loss"] = outputs["ce_loss"].item() if torch.is_tensor(outputs["ce_loss"]) else outputs["ce_loss"]
+        if "mse_loss" in outputs:
+            logs["mse_loss"] = outputs["mse_loss"].item() if torch.is_tensor(outputs["mse_loss"]) else outputs["mse_loss"]
+        self.log(logs)
+        
+        return loss.detach()
+    
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        model.eval()
+        with torch.no_grad():
+            outputs = model(**inputs)
+            loss = outputs.loss
+            # Print extra loss metrics if available.
+            if hasattr(outputs, "ce_loss"):
+                ce_loss = outputs.ce_loss.item() if torch.is_tensor(outputs.ce_loss) else outputs.ce_loss
+                print(f"Prediction Step CE Loss: {ce_loss:.4f}")
+            if hasattr(outputs, "mse_loss"):
+                mse_loss = outputs.mse_loss.item() if torch.is_tensor(outputs.mse_loss) else outputs.mse_loss
+                print(f"Prediction Step MSE Loss: {mse_loss:.4f}")
+            if prediction_loss_only:
+                return (loss, None, inputs.get("labels"))
+            logits = outputs.logits
+        return (loss, logits, inputs.get("labels"))
+
+""" class CustomTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        outputs = model(**inputs)
+        loss = outputs.loss
+        if not torch.is_tensor(loss):
+            loss = torch.tensor(loss, device=inputs["input_ids"].device, dtype=torch.float)
+        return (loss, outputs) if return_outputs else loss """
 
 # -----------------------------------------------------------------------------
 # 8. Main Training Script with Timestamp Logic
