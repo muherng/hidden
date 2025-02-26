@@ -287,7 +287,7 @@ class TwoStageModel(nn.Module):
         # Module1 pass: get hidden states.
         out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels, return_hidden=True, mse_loss=False)
         # Compute custom attention mask from s_mask.
-        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='ladder', window=self.window)
+        custom_attn_mask = compute_custom_attention_mask(s_mask, mode='sliding', window=self.window)
         # Module2 pass: use module1's hidden states to override s token positions, and pass the custom attention mask.
         out2 = self.module2(input_ids=input_ids, s_mask=s_mask, override_s=out1.hidden_states, labels=labels,
                             attention_mask=custom_attn_mask, mse_loss=True)
@@ -315,6 +315,10 @@ class PrintLossCallback(TrainerCallback):
         self.last_eval_loss = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        
+        if state.global_step % 10 != 0:
+            return
+
         if logs is None:
             return
 
