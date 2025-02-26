@@ -43,8 +43,8 @@ class TextWithSTokenDataset(Dataset):
         self.state_run = state_run
 
         # Load the dataset (using WikiText-103 for a larger corpus)
-        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        #self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
 
         # Pre-tokenize the dataset using .map() with batched processing and multiple processes.
         def tokenize_fn(examples):
@@ -133,7 +133,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         # Decoder.
         self.decoder = nn.Linear(self.hidden_dim, self.vocab_size)
         self.post_init()
-
+    
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor,
                 labels: torch.LongTensor = None, return_hidden: bool = False,
                 override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss=False):
@@ -149,8 +149,11 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             s_token_vector = self.s_token.unsqueeze(0).unsqueeze(0).expand(batch_size, seq_len, self.hidden_dim)
         embeddings = torch.where(s_mask.unsqueeze(-1), s_token_vector, text_embeddings)
         position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device).unsqueeze(0).expand(batch_size, seq_len)
-        hidden_states = embeddings + self.position_embedding(position_ids)
-        embed_copy = embeddings.clone()  # Copy with gradients tracked.
+        # Apply positional encoding to the embeddings.
+        pos_encoded_embeddings = embeddings + self.position_embedding(position_ids)
+        # Clone the positionally encoded embeddings for use as targets in MSE loss.
+        embed_copy = pos_encoded_embeddings.clone()  # Copy with gradients tracked.
+        hidden_states = pos_encoded_embeddings
         # Pass through transformer blocks with the custom attention mask if provided.
         for block in self.h:
             hidden_states = block(hidden_states, use_cache=False, attention_mask=attention_mask)[0]
@@ -163,22 +166,21 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
             shift_logits = logits[:, :-1, :]
             shift_labels = labels[:, 1:]
             ce_loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
-                                     shift_labels.reshape(-1),
-                                     ignore_index=-100)
+                                    shift_labels.reshape(-1),
+                                    ignore_index=-100)
             # Compute MSE loss between embed_copy and hidden_states for positions where shift_labels == -100.
-            #embed_copy is the target labels
-            #hidden_states is the predicted labels
+            # Now both embed_copy (target) and hidden_states (prediction) include positional encoding.
             if mse_loss: 
                 mask = (shift_labels == -100).unsqueeze(-1)  # Shape: (batch, seq_len-1, 1)
                 if mask.any():
                     mask_expanded = mask.expand(-1, -1, self.hidden_dim)
-                    mse_loss = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:,:-1][mask_expanded])
+                    mse_loss_val = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:, :-1][mask_expanded])
                 else:
-                    mse_loss = torch.tensor(0.0, device=hidden_states.device)
+                    mse_loss_val = torch.tensor(0.0, device=hidden_states.device)
                 regular = 0.5
                 output.ce_loss = ce_loss
-                output.mse_loss = mse_loss
-                output.loss = (1 - regular)*ce_loss + regular*mse_loss 
+                output.mse_loss = mse_loss_val
+                output.loss = (1 - regular) * ce_loss + regular * mse_loss_val 
             else: 
                 output.ce_loss = ce_loss
                 output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -316,36 +318,28 @@ class PrintLossCallback(TrainerCallback):
         if logs is None:
             return
 
-        # Get main training loss and compute perplexity.
-        if "loss" in logs:
-            current_loss = logs["loss"]
+        # Training loss.
+        current_loss = logs.get("loss", None)
+        if current_loss is not None:
             if isinstance(current_loss, torch.Tensor):
                 current_loss = current_loss.item()
             if current_loss < self.best_training_loss:
                 self.best_training_loss = current_loss
-            training_perplexity = math.exp(current_loss) if current_loss < 100 else float('inf')
-        else:
-            current_loss = None
-            training_perplexity = None
 
-        # Get evaluation loss and compute perplexity.
-        if "eval_loss" in logs:
-            current_eval_loss = logs["eval_loss"]
+        # Eval loss.
+        current_eval_loss = logs.get("eval_loss", None)
+        if current_eval_loss is not None:
             if isinstance(current_eval_loss, torch.Tensor):
                 current_eval_loss = current_eval_loss.item()
             self.last_eval_loss = current_eval_loss
             if current_eval_loss < self.best_eval_loss:
                 self.best_eval_loss = current_eval_loss
-            eval_perplexity = math.exp(current_eval_loss) if current_eval_loss < 100 else float('inf')
-        else:
-            current_eval_loss = self.last_eval_loss
-            eval_perplexity = math.exp(current_eval_loss) if current_eval_loss is not None and current_eval_loss < 100 else float('inf')
-        
-        # Get ce_loss and mse_loss if available.
-        ce_loss = logs.get("ce_loss", None)
+
+        # Eval ce_loss and mse_loss.
+        ce_loss = logs.get("eval_ce_loss", None)
         if isinstance(ce_loss, torch.Tensor):
             ce_loss = ce_loss.item()
-        mse_loss = logs.get("mse_loss", None)
+        mse_loss = logs.get("eval_mse_loss", None)
         if isinstance(mse_loss, torch.Tensor):
             mse_loss = mse_loss.item()
 
@@ -353,11 +347,11 @@ class PrintLossCallback(TrainerCallback):
         if current_loss is not None:
             out_str += f"Loss: {current_loss:.4f} "
         if current_eval_loss is not None:
-            out_str += f"| Eval Loss: {current_eval_loss:.4f}"
+            out_str += f"| Eval Loss: {current_eval_loss:.4f} "
         if ce_loss is not None:
-            out_str += f"| CE Loss: {ce_loss:.4f}, Train PPL: {training_perplexity:.4f} "
+            out_str += f"| Eval CE Loss: {ce_loss:.4f}, Eval PPL Loss: {math.exp(ce_loss):.4f}"
         if mse_loss is not None:
-            out_str += f"| MSE Loss: {mse_loss:.4f} , Eval PPL: {eval_perplexity:.4f}"
+            out_str += f"| Eval MSE Loss: {mse_loss:.4f}"
         
         print(out_str)
 
@@ -403,17 +397,35 @@ class CustomTrainer(Trainer):
         with torch.no_grad():
             outputs = model(**inputs)
             loss = outputs.loss
-            # Print extra loss metrics if available.
+            extra = {}
             if hasattr(outputs, "ce_loss"):
-                ce_loss = outputs.ce_loss.item() if torch.is_tensor(outputs.ce_loss) else outputs.ce_loss
-                print(f"Prediction Step CE Loss: {ce_loss:.4f}")
+                extra["ce_loss"] = outputs.ce_loss.item() if torch.is_tensor(outputs.ce_loss) else outputs.ce_loss
             if hasattr(outputs, "mse_loss"):
-                mse_loss = outputs.mse_loss.item() if torch.is_tensor(outputs.mse_loss) else outputs.mse_loss
-                print(f"Prediction Step MSE Loss: {mse_loss:.4f}")
+                extra["mse_loss"] = outputs.mse_loss.item() if torch.is_tensor(outputs.mse_loss) else outputs.mse_loss
             if prediction_loss_only:
-                return (loss, None, inputs.get("labels"))
+                return (loss, None, inputs.get("labels"), extra)
             logits = outputs.logits
-        return (loss, logits, inputs.get("labels"))
+        return (loss, logits, inputs.get("labels"), extra)
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+        losses, ce_losses, mse_losses = [], [], []
+        
+        for inputs in eval_dataloader:
+            loss, logits, labels, extra = self.prediction_step(self.model, inputs, prediction_loss_only=False, ignore_keys=ignore_keys)
+            losses.append(loss.item())
+            ce_losses.append(extra.get("ce_loss", 0))
+            mse_losses.append(extra.get("mse_loss", 0))
+        
+        metrics = {
+            "eval_loss": np.mean(losses),
+            "eval_ce_loss": np.mean(ce_losses) if ce_losses else None,
+            "eval_mse_loss": np.mean(mse_losses) if mse_losses else None,
+            "eval_ppl": np.exp(np.mean(ce_losses)) if ce_losses else None
+        }
+        
+        print(f"Evaluation metrics: {metrics}")
+        return metrics
 
 """ class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -505,7 +517,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=200,
+        eval_steps=100,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
