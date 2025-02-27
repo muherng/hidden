@@ -25,6 +25,7 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
 
 import datasets
+from types import SimpleNamespace
 
 # -----------------------------------------------------------------------------
 # 1. Custom Dataset: Interleaved s tokens
@@ -358,7 +359,8 @@ class TwoStageModel(nn.Module):
             mse_loss=True
         )
         # Here, out2.loss is computed over all blocks at once.
-        return CausalLMOutput(loss=out2.loss)
+        return SimpleNamespace(loss=out2.loss, ce_loss=out2.ce_loss, mse_loss=out2.mse_loss, logits=out2.logits)
+
 
 # -----------------------------------------------------------------------------
 # 6. Collate Function
@@ -420,15 +422,12 @@ class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         outputs = model(**inputs)
         loss = outputs.loss
-        if not torch.is_tensor(loss):
-            loss = torch.tensor(loss, device=inputs["input_ids"].device, dtype=torch.float)
-        extra = {}
-        if hasattr(outputs, "ce_loss"):
-            extra["ce_loss"] = outputs.ce_loss
-        if hasattr(outputs, "mse_loss"):
-            extra["mse_loss"] = outputs.mse_loss
+        # Retrieve ce_loss and mse_loss if present; otherwise default to a zero tensor.
+        ce_loss = getattr(outputs, "ce_loss", torch.tensor(0.0, device=loss.device))
+        mse_loss = getattr(outputs, "mse_loss", torch.tensor(0.0, device=loss.device))
+        extra = {"ce_loss": ce_loss, "mse_loss": mse_loss}
         return (loss, {"loss": loss, **extra})
-
+    
     def training_step(self, model, inputs, num_items_in_batch=None):
         model.train()
         inputs = self._prepare_inputs(inputs)
@@ -438,11 +437,12 @@ class CustomTrainer(Trainer):
         if self.args.gradient_accumulation_steps > 1:
             loss = loss / self.args.gradient_accumulation_steps
         loss.backward()
+        # Build the log dictionary.
         logs = {"loss": loss.item()}
-        if "ce_loss" in outputs:
-            logs["ce_loss"] = outputs["ce_loss"].item() if torch.is_tensor(outputs["ce_loss"]) else outputs["ce_loss"]
-        if "mse_loss" in outputs:
-            logs["mse_loss"] = outputs["mse_loss"].item() if torch.is_tensor(outputs["mse_loss"]) else outputs["mse_loss"]
+        ce_loss = outputs.get("ce_loss", torch.tensor(0.0))
+        mse_loss = outputs.get("mse_loss", torch.tensor(0.0))
+        logs["ce_loss"] = ce_loss.item() if torch.is_tensor(ce_loss) else ce_loss
+        logs["mse_loss"] = mse_loss.item() if torch.is_tensor(mse_loss) else mse_loss
         self.log(logs)
         return loss.detach()
     
@@ -451,32 +451,38 @@ class CustomTrainer(Trainer):
         with torch.no_grad():
             outputs = model(**inputs)
             loss = outputs.loss
-            extra = {}
-            if hasattr(outputs, "ce_loss"):
-                extra["ce_loss"] = outputs.ce_loss.item() if torch.is_tensor(outputs.ce_loss) else outputs.ce_loss
-            if hasattr(outputs, "mse_loss"):
-                extra["mse_loss"] = outputs.mse_loss.item() if torch.is_tensor(outputs.mse_loss) else outputs.mse_loss
+            ce_loss = getattr(outputs, "ce_loss", torch.tensor(0.0, device=loss.device))
+            mse_loss = getattr(outputs, "mse_loss", torch.tensor(0.0, device=loss.device))
+            extra = {
+                "ce_loss": ce_loss.item() if torch.is_tensor(ce_loss) else ce_loss,
+                "mse_loss": mse_loss.item() if torch.is_tensor(mse_loss) else mse_loss
+            }
             if prediction_loss_only:
                 return (loss, None, inputs.get("labels"), extra)
             logits = outputs.logits
         return (loss, logits, inputs.get("labels"), extra)
-
+    
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
         losses, ce_losses, mse_losses = [], [], []
         for inputs in eval_dataloader:
-            loss, logits, labels, extra = self.prediction_step(self.model, inputs, prediction_loss_only=False, ignore_keys=ignore_keys)
+            loss, logits, labels, extra = self.prediction_step(
+                self.model, inputs, prediction_loss_only=False, ignore_keys=ignore_keys
+            )
             losses.append(loss.item())
             ce_losses.append(extra.get("ce_loss", 0))
             mse_losses.append(extra.get("mse_loss", 0))
+        mean_ce = np.mean(ce_losses) if ce_losses else 0.0
+        mean_mse = np.mean(mse_losses) if mse_losses else 0.0
         metrics = {
             "eval_loss": np.mean(losses),
-            "eval_ce_loss": np.mean(ce_losses) if ce_losses else None,
-            "eval_mse_loss": np.mean(mse_losses) if mse_losses else None,
-            "eval_ppl": np.exp(np.mean(ce_losses)) if ce_losses else None
+            "eval_ce_loss": mean_ce,
+            "eval_mse_loss": mean_mse,
+            "eval_ppl": np.exp(mean_ce) if mean_ce > 0 else float('inf')
         }
         print(f"Evaluation metrics: {metrics}")
         return metrics
+
 
 # -----------------------------------------------------------------------------
 # 9. Main Training Script with Timestamp Logic
