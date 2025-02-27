@@ -129,7 +129,7 @@ class TextWithSTokenDataset(Dataset):
 #
 class NoExtraLayerSTokenGPTConfig(GPT2Config):
     def __init__(self, vocab_size=1, n_positions=1024, n_embd=256, n_layer=4, n_head=4,
-                 dropout=0.1, s_token_learnable=False, **kwargs):
+                 dropout=0.1, s_token_learnable=False, state_run=None, text_run=None, **kwargs):
         super().__init__(vocab_size=vocab_size,
                          n_positions=n_positions,
                          n_embd=n_embd,
@@ -140,6 +140,8 @@ class NoExtraLayerSTokenGPTConfig(GPT2Config):
                          attn_pdrop=dropout,
                          **kwargs)
         self.s_token_learnable = s_token_learnable
+        self.state_run = state_run
+        self.text_run = text_run 
 
 class NoExtraLayerSTokenGPTModel(PreTrainedModel):
     config_class = NoExtraLayerSTokenGPTConfig
@@ -148,6 +150,8 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         super().__init__(config)
         self.hidden_dim = config.n_embd
         self.vocab_size = config.vocab_size
+        self.state_run = config.state_run
+        self.text_run = config.text_run 
 
         # Standard token embedding.
         self.token_embedding = nn.Embedding(self.vocab_size, self.hidden_dim)
@@ -164,23 +168,36 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
     
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor,
                 labels: torch.LongTensor = None, return_hidden: bool = False,
-                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss=False):
+                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss: bool = False):
         """
-        If override_s is provided, it is used at positions where s_mask is True.
-        An attention_mask (if provided) is used in each transformer block.
+        Forward pass with two different loss computations.
+        
+        If mse_loss is True and self.state_run > 0 then we assume block mode:
+        - Let L_block = text_run + 2*state_run.
+        - Compute Cross Entropy (CE) loss over the region:
+            indices [state_run-1, ..., state_run+text_run-2] predict targets at indices [state_run, ..., state_run+text_run-1].
+        - Compute MSE loss over the region:
+            indices [state_run+text_run-1, ..., L_block-2] predict targets at indices [state_run+text_run, ..., L_block-1].
+        - Combine losses with mixing ratio.
+        
+        Otherwise (for example when self.state_run==0), we do standard shift-by-one next-token prediction.
         """
         batch_size, seq_len = input_ids.shape
+        # Get embeddings for text tokens.
         text_embeddings = self.token_embedding(input_ids.clamp(min=0))
         if override_s is not None:
             s_token_vector = override_s
         else:
             s_token_vector = self.s_token.unsqueeze(0).unsqueeze(0).expand(batch_size, seq_len, self.hidden_dim)
+        # Replace positions where s_mask is True with s_token vector.
         embeddings = torch.where(s_mask.unsqueeze(-1), s_token_vector, text_embeddings)
+        # Add positional embeddings.
         position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device).unsqueeze(0).expand(batch_size, seq_len)
         pos_encoded_embeddings = embeddings + self.position_embedding(position_ids)
-        # Copy for target of MSE loss.
+        # Copy for MSE target.
         embed_copy = pos_encoded_embeddings.clone()
         hidden_states = pos_encoded_embeddings
+        # Pass through transformer blocks.
         for block in self.h:
             hidden_states = block(hidden_states, use_cache=False, attention_mask=attention_mask)[0]
         hidden_states = self.ln_f(hidden_states)
@@ -189,29 +206,42 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         if return_hidden:
             output.hidden_states = hidden_states
         if labels is not None and not return_hidden:
-            # Shift for next-token prediction.
-            shift_logits = logits[:, :-1, :]
-            shift_labels = labels[:, 1:]
-            ce_loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
-                                      shift_labels.reshape(-1),
-                                      ignore_index=-100)
-            if mse_loss: 
-                # Compute MSE loss on positions where label is -100 (i.e. s tokens).
-                mask = (shift_labels == -100).unsqueeze(-1)
-                if mask.any():
-                    mask_expanded = mask.expand(-1, -1, self.hidden_dim)
-                    mse_loss_val = F.mse_loss(embed_copy[:, 1:][mask_expanded], hidden_states[:, :-1][mask_expanded])
-                else:
-                    mse_loss_val = torch.tensor(0.0, device=hidden_states.device)
-                regular = 0.5
-                output.ce_loss = ce_loss
-                output.mse_loss = mse_loss_val
-                output.loss = (1 - regular) * ce_loss + regular * mse_loss_val 
-            else: 
+            # If state_run==0 or we are not in block mode, use standard next-token prediction.
+            if self.state_run == 0 or not mse_loss:
+                shift_logits = logits[:, :-1, :]
+                shift_labels = labels[:, 1:]
+                ce_loss = F.cross_entropy(shift_logits.reshape(-1, self.vocab_size),
+                                        shift_labels.reshape(-1),
+                                        ignore_index=-100)
                 output.ce_loss = ce_loss
                 output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
                 output.loss = ce_loss
+            else:
+                # Custom block loss.
+                # Assume block length L_block = text_run + 2*state_run.
+                L_block = logits.size(1)
+                sr = self.state_run      # number of state tokens per block group.
+                tr = self.text_run       # number of text tokens.
+                # Boundary: the CE region spans indices [sr-1, sr+tr-2] (predictions)
+                # and targets are at indices [sr, sr+tr-1].
+                B = sr + tr
+                ce_logits = logits[:, sr - 1 : B - 1, :]  # shape: (batch, tr, vocab)
+                ce_targets = labels[:, sr : B]             # shape: (batch, tr)
+                ce_loss = F.cross_entropy(
+                    ce_logits.reshape(-1, self.vocab_size),
+                    ce_targets.reshape(-1),
+                    ignore_index=-100
+                )
+                # MSE region: predictions from indices [B-1, L_block-2] to predict targets at [B, L_block-1].
+                mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
+                mse_target = embed_copy[:, B : L_block, :]
+                mse_loss_val = F.mse_loss(mse_pred, mse_target)
+                regular = 0.5
+                output.ce_loss = ce_loss
+                output.mse_loss = mse_loss_val
+                output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
         return output
+
 
 # -----------------------------------------------------------------------------
 # 3. Helper: Compute Custom Attention Mask
@@ -546,6 +576,8 @@ def main():
         n_head=args.heads,
         dropout=0.1,      
         s_token_learnable=False,
+        state_run = args.state_run,
+        text_run = args.text_run
     )
     module1 = NoExtraLayerSTokenGPTModel(config1)
     # Instantiate module2.
@@ -557,6 +589,8 @@ def main():
         n_head=args.heads,
         dropout=0.1,      
         s_token_learnable=False,
+        state_run = args.state_run,
+        text_run = args.text_run
     )
     module2 = NoExtraLayerSTokenGPTModel(config2)
     # Build composite two-stage model.
