@@ -246,7 +246,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 #mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 #mse_target = embed_copy[:, B : L_block, :]
                 #mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                #regular = 0.0
+                regular = 0.5
                 output.ce_loss = ce_loss
                 #output.mse_loss = mse_loss_val
                 output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -302,6 +302,88 @@ def create_blocks_vectorized(hidden, input_ids, s_mask, labels, text_run, state_
     blocks_labels = labels.unfold(dimension=1, size=L_block, step=step)
     return blocks_input_ids, blocks_s_mask, blocks_labels, blocks_hidden
 
+def extract_blocks_vectorized(hidden, input_ids, s_mask, labels, text_run, state_run, device):
+    """
+    Extract blocks in a vectorized fashion using advanced indexing.
+    
+    Suppose each example has length L and we want blocks of length:
+        L_block = text_run + 2*state_run
+    with a sliding step:
+        step = text_run + state_run.
+    
+    Then for each example b and for each block index k, we want the block:
+        x[b, k*step : k*step + L_block]
+    This helper computes an index tensor and uses torch.gather to extract the blocks.
+    
+    Args:
+        hidden: Tensor of shape (B, L, hidden_dim) (module1's hidden states).
+        input_ids: Tensor of shape (B, L) of discrete token ids.
+        s_mask: Tensor of shape (B, L) (bool).
+        labels: Tensor of shape (B, L).
+        text_run: int, number of text tokens per block.
+        state_run: int, number of state tokens at beginning and end of each block.
+        device: device.
+        
+    Returns:
+        flat_input_ids: (B * n_blocks, L_block)
+        flat_s_mask:    (B * n_blocks, L_block)
+        flat_labels:    (B * n_blocks, L_block)
+        flat_override_s: (B * n_blocks, L_block, hidden_dim)
+        block_mask:     (B * n_blocks, 1, L_block, L_block)
+    """
+    B, L, hidden_dim = hidden.shape
+    L_block = text_run + 2 * state_run
+    step = text_run + state_run
+    n_blocks = (L - L_block) // step + 1
+
+    # Create an index tensor for one block: indices 0..L_block-1.
+    block_idx = torch.arange(L_block, device=device).unsqueeze(0)  # shape (1, L_block)
+    # Create block start positions: [0, step, 2*step, ..., (n_blocks-1)*step].
+    block_starts = torch.arange(0, n_blocks * step, step, device=device).unsqueeze(1)  # shape (n_blocks, 1)
+    # The positions for each block are: block_starts + block_idx.
+    pos_idx = block_starts + block_idx  # shape (n_blocks, L_block)
+    
+    # Expand pos_idx to the batch dimension.
+    pos_idx = pos_idx.unsqueeze(0).expand(B, -1, -1)  # shape (B, n_blocks, L_block)
+    
+    # For each tensor, we gather along the sequence dimension.
+    # First, ensure input tensors are contiguous.
+    input_ids = input_ids.contiguous()
+    s_mask = s_mask.contiguous()
+    labels = labels.contiguous()
+    hidden = hidden.contiguous()
+    
+    # Expand each tensor so we can gather using pos_idx.
+    # We want to index along dimension 1 (the sequence dimension).
+    input_ids_exp = input_ids.unsqueeze(1).expand(-1, n_blocks, L)
+    flat_input_ids = torch.gather(input_ids_exp, dim=2, index=pos_idx)
+    
+    s_mask_exp = s_mask.unsqueeze(1).expand(-1, n_blocks, L)
+    flat_s_mask = torch.gather(s_mask_exp, dim=2, index=pos_idx)
+    
+    labels_exp = labels.unsqueeze(1).expand(-1, n_blocks, L)
+    flat_labels = torch.gather(labels_exp, dim=2, index=pos_idx)
+    
+    # For hidden, we need to gather along dimension 1 and keep the last dimension.
+    hidden_exp = hidden.unsqueeze(1).expand(-1, n_blocks, L, hidden_dim)
+    pos_idx_exp = pos_idx.unsqueeze(-1).expand(B, n_blocks, L_block, hidden_dim)
+    flat_override_s = torch.gather(hidden_exp, dim=2, index=pos_idx_exp)
+    
+    # Now flatten the batch and block dimensions.
+    flat_input_ids = flat_input_ids.reshape(B * n_blocks, L_block)
+    flat_s_mask = flat_s_mask.reshape(B * n_blocks, L_block)
+    flat_labels = flat_labels.reshape(B * n_blocks, L_block)
+    flat_override_s = flat_override_s.reshape(B * n_blocks, L_block, hidden_dim)
+    
+    # Compute the block mask using your helper.
+    block_mask = compute_block_mask(L_block, state_run, device=device)
+    block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(B * n_blocks, 1, L_block, L_block)
+    
+    return flat_input_ids, flat_s_mask, flat_labels, flat_override_s, block_mask
+
+
+
+
 class TwoStageModel(nn.Module):
     def __init__(self, module1: NoExtraLayerSTokenGPTModel, module2: NoExtraLayerSTokenGPTModel,
                  window=None, text_run=None, state_run=None):
@@ -328,37 +410,16 @@ class TwoStageModel(nn.Module):
             # Optionally detach gradients if you want module1 frozen:
             #out1.hidden_states = out1.hidden_states.detach()
 
-            # Compute block parameters.
-            L_block = self.text_run + 2 * self.state_run  # block length
-            step = self.text_run + self.state_run           # sliding step
-
-            batch_size, seq_len, hidden_dim = out1.hidden_states.shape
-
-            # Prepare lists to store blocks.
-            blocks_input_ids = []
-            blocks_s_mask = []
-            blocks_labels = []
-            blocks_hidden = []
-
-            # Loop over the batch.
-            for b in range(batch_size):
-                # For each example, slide over positions in steps of 'step'.
-                for start in range(0, seq_len - L_block + 1, step):
-                    end = start + L_block
-                    blocks_input_ids.append(input_ids[b, start:end])
-                    blocks_s_mask.append(s_mask[b, start:end])
-                    blocks_labels.append(labels[b, start:end])
-                    blocks_hidden.append(out1.hidden_states[b, start:end, :])
-            
-            # Stack blocks into tensors.
-            flat_input_ids = torch.stack(blocks_input_ids, dim=0)  # shape (N, L_block)
-            flat_s_mask = torch.stack(blocks_s_mask, dim=0)          # shape (N, L_block)
-            flat_labels = torch.stack(blocks_labels, dim=0)          # shape (N, L_block)
-            flat_override_s = torch.stack(blocks_hidden, dim=0)      # shape (N, L_block, hidden_dim)
-
-            # Build the block mask using our helper function.
-            block_mask = compute_block_mask(L_block, self.state_run, device=input_ids.device)
-            block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(flat_input_ids.shape[0], 1, L_block, L_block)
+            # Use the helper to extract blocks.
+            flat_input_ids, flat_s_mask, flat_labels, flat_override_s, block_mask = extract_blocks_vectorized(
+                hidden=out1.hidden_states, 
+                input_ids=input_ids, 
+                s_mask=s_mask, 
+                labels=labels, 
+                text_run=self.text_run, 
+                state_run=self.state_run, 
+                device=input_ids.device
+            )
 
             # Pass all blocks through module2.
             out2 = self.module2(
