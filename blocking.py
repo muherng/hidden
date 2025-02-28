@@ -326,7 +326,7 @@ class TwoStageModel(nn.Module):
                 mse_loss=False
             )
             # Optionally detach gradients if you want module1 frozen:
-            out1.hidden_states = out1.hidden_states.detach()
+            #out1.hidden_states = out1.hidden_states.detach()
 
             # Compute block parameters.
             L_block = self.text_run + 2 * self.state_run  # block length
