@@ -33,31 +33,30 @@ from types import SimpleNamespace
 class TextWithSTokenDataset(Dataset):
     def __init__(self, split, tokenizer, seq_len, text_run, state_run):
         """
-        For each contiguous chunk of tokenized text (length seq_len), we create a sample with blocks that
-        always begin and end with state_run s tokens.  Specifically, we:
+        For each contiguous chunk of tokenized text (length seq_len), we create a sample that,
+        after interleaving state tokens, contains an exact integer number of complete blocks.
         
-         - Prepend state_run s tokens at the very start.
-         - Insert text tokens.
-         - After every text_run text tokens, insert state_run s tokens.
-         - At the end, if there is an incomplete block, append state_run s tokens.
+        We do this by:
+          - Taking a chunk of seq_len tokens.
+          - Trimming it so that only an integer number of text-run groups is used.
+          - Prepending state_run state tokens.
+          - After every text_run text tokens, inserting state_run state tokens.
         
-        For text tokens the label is the token id, and for s tokens (marked with token id -1) the label is -100.
+        For text tokens, the label is the token id; for state tokens (token id -1) the label is -100.
         """
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.text_run = text_run
         self.state_run = state_run
 
-        # Load the dataset (using WikiText-103 for a larger corpus)
-        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        # Load dataset (using WikiText-2 for a smaller corpus here).
         self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
 
         # Pre-tokenize the dataset.
         def tokenize_fn(examples):
             return tokenizer(examples["text"], add_special_tokens=False)
-        
         self.data = self.data.map(
-            tokenize_fn, 
+            tokenize_fn,
             batched=True,
             num_proc=4,
             remove_columns=["text"]
@@ -70,28 +69,30 @@ class TextWithSTokenDataset(Dataset):
 
         # Create samples.
         self.samples = []
-        # We step through the flattened tokens in chunks of length seq_len.
         for i in range(0, len(self.token_ids) - seq_len, seq_len):
             a_tokens = self.token_ids[i:i + seq_len]
+            # Keep only an integer number of complete text groups.
+            n_groups = len(a_tokens) // self.text_run
+            a_tokens = a_tokens[: n_groups * self.text_run]
+
             input_ids_list = []
             s_mask_list = []
             labels_list = []
-            
-            # Prepend state_run s tokens at the beginning of the sample.
+
+            # Prepend state_run s tokens.
             for _ in range(self.state_run):
                 input_ids_list.append(-1)
                 s_mask_list.append(True)
                 labels_list.append(-100)
-            
+
             text_count = 0
-            for j, token in enumerate(a_tokens):
+            for token in a_tokens:
                 # Add a text token.
                 input_ids_list.append(token)
                 s_mask_list.append(False)
                 labels_list.append(token)
                 text_count += 1
-
-                # After text_run text tokens, insert state_run s tokens.
+                # After every text_run text tokens, insert state_run s tokens.
                 if text_count == self.text_run:
                     for _ in range(self.state_run):
                         input_ids_list.append(-1)
@@ -99,13 +100,10 @@ class TextWithSTokenDataset(Dataset):
                         labels_list.append(-100)
                     text_count = 0
 
-            # If there's an incomplete block at the end, add trailing state_run s tokens.
-            if text_count > 0:
-                for _ in range(self.state_run):
-                    input_ids_list.append(-1)
-                    s_mask_list.append(True)
-                    labels_list.append(-100)
-            
+            # (Now the sample length is exactly:
+            #   state_run + n_groups*(text_run + state_run)
+            # which is an exact multiple of the block length = text_run + 2*state_run.)
+
             sample = {
                 "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
                 "s_mask": torch.tensor(s_mask_list, dtype=torch.bool),
@@ -236,63 +234,13 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 mse_target = embed_copy[:, B : L_block, :]
                 mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.5
+                regular = 0.0
                 output.ce_loss = ce_loss
                 output.mse_loss = mse_loss_val
-                output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
+                #output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
+                output.loss = ce_loss
         return output
 
-
-# -----------------------------------------------------------------------------
-# 3. Helper: Compute Custom Attention Mask
-# -----------------------------------------------------------------------------
-def compute_custom_attention_mask(s_mask, mode='sliding', window=None):
-    """
-    Computes an attention mask of shape (B, 1, L, L) for a given s_mask.
-    In sliding mode, each token attends only to tokens within a specified window.
-    """
-    B, L = s_mask.size()
-    device = s_mask.device
-
-    if mode == 'sliding':
-        if window is None:
-            window = L
-        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
-        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
-        diff = i_indices - j_indices
-        allowed = (diff >= 0) & (diff < window)
-        attn_mask = torch.where(allowed, torch.tensor(0.0, device=device),
-                                torch.tensor(-1e9, device=device))
-        attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
-        return attn_mask
-    elif mode == 'stagger':
-        indices = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
-        s_mask_idx = torch.where(s_mask, indices, torch.tensor(-1, device=device))
-        _, last_s = torch.cummax(s_mask_idx, dim=1)
-        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
-        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
-        last_s_expanded = last_s.unsqueeze(2)
-        causal = (j_indices < i_indices).to(device).unsqueeze(0).expand(B, L, L)
-        allowed = (j_indices.unsqueeze(0).expand(B, L, L) >= last_s_expanded)
-        final_allowed = causal & allowed
-        attn_mask = torch.where(final_allowed, torch.tensor(0.0, device=device),
-                                torch.tensor(-1e9, device=device))
-        attn_mask = attn_mask.unsqueeze(1)
-        return attn_mask 
-    elif mode == 'ladder':
-        if window is None:
-            raise ValueError("Window parameter must be specified for ladder mode")
-        i_indices = torch.arange(L, device=device).unsqueeze(1).expand(L, L)
-        j_indices = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
-        block_start = (torch.arange(L, device=device) // window) * window
-        allowed = (j_indices >= block_start.unsqueeze(1)) & (j_indices <= i_indices)
-        attn_mask = torch.where(allowed, torch.tensor(0.0, device=device),
-                                torch.tensor(-1e9, device=device))
-        attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).expand(B, 1, L, L)
-        return attn_mask
-    else:
-        raise ValueError("Invalid mode for compute_custom_attention_mask. "
-                         "Choose 'default' or 'stagger'.")
 
 def compute_block_mask(L, state_run, device):
     """
@@ -368,6 +316,7 @@ class TwoStageModel(nn.Module):
         blocks_labels = labels.unfold(dimension=1, size=L_block, step=step)
         # blocks_* have shape (B, n_blocks, L_block) (for blocks_hidden, extra dim hidden_dim)
         B, n_blocks, L_block = blocks_input_ids.shape
+        #print('n_blocks:', n_blocks)
         flat_input_ids = blocks_input_ids.reshape(B * n_blocks, L_block)
         flat_s_mask = blocks_s_mask.reshape(B * n_blocks, L_block)
         flat_labels = blocks_labels.reshape(B * n_blocks, L_block)
@@ -378,6 +327,8 @@ class TwoStageModel(nn.Module):
         block_mask = compute_block_mask(L_block, self.state_run, device=input_ids.device)
         # Expand to shape (B*n_blocks, 1, L_block, L_block) as expected by module2.
         block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(B * n_blocks, 1, L_block, L_block)
+        #print('flat_override_s:', flat_override_s.shape)
+        print('flat_override_s:', flat_override_s[:,0,0])
         
         # Process all blocks at once.
         out2 = self.module2(
@@ -513,6 +464,29 @@ class CustomTrainer(Trainer):
         print(f"Evaluation metrics: {metrics}")
         return metrics
 
+class StateTokenCheckCallback(TrainerCallback):
+    def __init__(self, tolerance=1e-6):
+        self.tolerance = tolerance
+        self.initial_state_token = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        # Save the initial module1.s_token
+        model = kwargs.get("model", None)
+        if model is None:
+            return
+        # Assuming the composite model has module1 as an attribute
+        self.initial_state_token = model.module1.s_token.clone().detach()
+        print("Saved initial module1.s_token.")
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs.get("model", None)
+        if model is None or self.initial_state_token is None:
+            return
+        current_token = model.module1.s_token.detach()
+        max_diff = (current_token - self.initial_state_token).abs().max().item()
+        if max_diff > self.tolerance:
+            print(f"Warning: module1.s_token has changed (max diff = {max_diff:.2e}) at step {state.global_step}.")
+
 
 # -----------------------------------------------------------------------------
 # 9. Main Training Script with Timestamp Logic
@@ -570,7 +544,7 @@ def main():
     # Instantiate module1.
     config1 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
-        n_positions=1024,
+        n_positions=2048,
         n_embd=args.hidden,       
         n_layer=args.layers,        
         n_head=args.heads,
@@ -583,7 +557,7 @@ def main():
     # Instantiate module2.
     config2 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
-        n_positions=1024,
+        n_positions=2048,
         n_embd=args.hidden,       
         n_layer=args.layers,        
         n_head=args.heads,
@@ -601,7 +575,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=100,
+        eval_steps=10000,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
@@ -626,6 +600,11 @@ def main():
         tokenizer=tokenizer,
     )
     trainer.add_callback(PrintLossCallback())
+    
+    #debugging
+    state_token_check = StateTokenCheckCallback(tolerance=1e-6)
+    trainer.add_callback(state_token_check)
+    
     trainer.train()
 
 if __name__ == "__main__":
