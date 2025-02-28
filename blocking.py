@@ -317,65 +317,59 @@ class TwoStageModel(nn.Module):
         self.state_run = state_run
 
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor, labels: torch.LongTensor = None):
-        # Module1 pass: get hidden states.
-        out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels,
-                            return_hidden=True, mse_loss=False)
-        module1 = False
-        if module1: 
-            return SimpleNamespace(loss=out1.loss, ce_loss=out1.ce_loss, mse_loss=out1.mse_loss, logits=out1.logits)
-        # Use module1's hidden states as override for s token positions.
-        # --- Vectorized block extraction via unfold ---
-        # (Assuming a fixed block length and step as follows:)
-        #TODO: Debugging by detaching all the hidden states
-        #out1.hidden_states.detach()
-        out1.hidden_states.detach()
-        #out1.hidden_states = torch.randn(out1.hidden_states.shape, requires_grad=False)
+            # Module1 pass: get hidden states.
+            out1 = self.module1(
+                input_ids=input_ids, 
+                s_mask=s_mask, 
+                labels=labels,
+                return_hidden=True, 
+                mse_loss=False
+            )
+            # Optionally detach gradients if you want module1 frozen:
+            out1.hidden_states = out1.hidden_states.detach()
 
-        L_block = self.text_run + 2 * self.state_run  # block length
-        step = self.text_run + self.state_run           # sliding step
-        blocks_hidden = out1.hidden_states.unfold(dimension=1, size=L_block, step=step)
-        blocks_input_ids = input_ids.unfold(dimension=1, size=L_block, step=step)
-        blocks_s_mask = s_mask.unfold(dimension=1, size=L_block, step=step)
-        blocks_labels = labels.unfold(dimension=1, size=L_block, step=step)
-        # blocks_* have shape (B, n_blocks, L_block) (for blocks_hidden, extra dim hidden_dim)
-        B, n_blocks, L_block = blocks_input_ids.shape
-        #print('n_blocks:', n_blocks)
-        flat_input_ids = blocks_input_ids.reshape(B * n_blocks, L_block)
-        flat_s_mask = blocks_s_mask.reshape(B * n_blocks, L_block)
-        flat_labels = blocks_labels.reshape(B * n_blocks, L_block)
-        flat_override_s = blocks_hidden.reshape(B * n_blocks, L_block, -1)
-        
-        # --- New Block Mask ---
-        # Build a block_mask of shape (L_block, L_block) that is the same for all blocks.
-        block_mask = compute_block_mask(L_block, self.state_run, device=input_ids.device)
-        #print('block_mask:', block_mask)
-        # Expand to shape (B*n_blocks, 1, L_block, L_block) as expected by module2.
-        block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(B * n_blocks, 1, L_block, L_block)
-        #print('flat_override_s:', flat_override_s.shape)
-        #print('flat_override_s:', flat_override_s[:,0,0])
-        #print('input_ids: ', flat_input_ids.shape)
-        #print('labels: ', flat_labels.shape)
-        #print('s_mask: ', flat_s_mask.shape)
+            # Compute block parameters.
+            L_block = self.text_run + 2 * self.state_run  # block length
+            step = self.text_run + self.state_run           # sliding step
 
-        #print('flat_override_s:', flat_override_s[:4,:,0])
-        #print('flat_override_s:', flat_override_s[:,0,0])
-        #print('input_ids: ', flat_input_ids[:4,:])
-        #print('labels: ', flat_labels[:4,:])
-        #print('s_mask: ', flat_s_mask[:4,:])
+            batch_size, seq_len, hidden_dim = out1.hidden_states.shape
 
+            # Prepare lists to store blocks.
+            blocks_input_ids = []
+            blocks_s_mask = []
+            blocks_labels = []
+            blocks_hidden = []
 
-        
-        # Process all blocks at once.
-        out2 = self.module2(
-            input_ids=flat_input_ids.to(input_ids.device),
-            s_mask=flat_s_mask.to(input_ids.device),
-            override_s=flat_override_s.to(input_ids.device),
-            labels=flat_labels.to(input_ids.device),
-            attention_mask=block_mask,
-            mse_loss=True
-        )
-        # Here, out2.loss is computed over all blocks at once.
-        return SimpleNamespace(loss=out2.loss, ce_loss=out2.ce_loss, mse_loss=out2.mse_loss, logits=out2.logits)
+            # Loop over the batch.
+            for b in range(batch_size):
+                # For each example, slide over positions in steps of 'step'.
+                for start in range(0, seq_len - L_block + 1, step):
+                    end = start + L_block
+                    blocks_input_ids.append(input_ids[b, start:end])
+                    blocks_s_mask.append(s_mask[b, start:end])
+                    blocks_labels.append(labels[b, start:end])
+                    blocks_hidden.append(out1.hidden_states[b, start:end, :])
+            
+            # Stack blocks into tensors.
+            flat_input_ids = torch.stack(blocks_input_ids, dim=0)  # shape (N, L_block)
+            flat_s_mask = torch.stack(blocks_s_mask, dim=0)          # shape (N, L_block)
+            flat_labels = torch.stack(blocks_labels, dim=0)          # shape (N, L_block)
+            flat_override_s = torch.stack(blocks_hidden, dim=0)      # shape (N, L_block, hidden_dim)
+
+            # Build the block mask using our helper function.
+            block_mask = compute_block_mask(L_block, self.state_run, device=input_ids.device)
+            block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(flat_input_ids.shape[0], 1, L_block, L_block)
+
+            # Pass all blocks through module2.
+            out2 = self.module2(
+                input_ids=flat_input_ids.to(input_ids.device),
+                s_mask=flat_s_mask.to(input_ids.device),
+                override_s=flat_override_s.to(input_ids.device),
+                labels=flat_labels.to(input_ids.device),
+                attention_mask=block_mask,
+                mse_loss=True
+            )
+            return SimpleNamespace(loss=out2.loss, ce_loss=out2.ce_loss, mse_loss=out2.mse_loss, logits=out2.logits)
 
 
 # -----------------------------------------------------------------------------
