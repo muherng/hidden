@@ -166,7 +166,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
     
     def forward(self, input_ids: torch.LongTensor, s_mask: torch.BoolTensor,
                 labels: torch.LongTensor = None, return_hidden: bool = False,
-                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss: bool = False):
+                override_s: torch.Tensor = None, attention_mask: torch.Tensor = None, mse_loss: bool = False, module='module1'):
         """
         Forward pass with two different loss computations.
         
@@ -191,7 +191,9 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         embeddings = torch.where(s_mask.unsqueeze(-1), s_token_vector, text_embeddings)
         # Add positional embeddings.
         position_ids = torch.arange(seq_len, dtype=torch.long, device=embeddings.device).unsqueeze(0).expand(batch_size, seq_len)
+        #comment out this line for debugging 
         pos_encoded_embeddings = embeddings + self.position_embedding(position_ids)
+        #pos_encoded_embeddings = embeddings 
         # Copy for MSE target.
         embed_copy = pos_encoded_embeddings.clone()
         hidden_states = pos_encoded_embeddings
@@ -203,6 +205,16 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         output = CausalLMOutput(logits=logits)
         if return_hidden:
             output.hidden_states = hidden_states
+            ce_logits = logits[:, 0 : 1, :]  # shape: (batch, tr, vocab)
+            ce_targets = labels[:, 1 : 2]             # shape: (batch, tr)
+            ce_loss = F.cross_entropy(
+                ce_logits.reshape(-1, self.vocab_size),
+                ce_targets.reshape(-1),
+                ignore_index=-100
+            )
+            output.loss = ce_loss
+            output.ce_loss = ce_loss
+            output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
         if labels is not None and not return_hidden:
             # If state_run==0 or we are not in block mode, use standard next-token prediction.
             if self.state_run == 0 or not mse_loss:
@@ -231,12 +243,13 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                     ignore_index=-100
                 )
                 # MSE region: predictions from indices [B-1, L_block-2] to predict targets at [B, L_block-1].
-                mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
-                mse_target = embed_copy[:, B : L_block, :]
-                mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.0
+                #mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
+                #mse_target = embed_copy[:, B : L_block, :]
+                #mse_loss_val = F.mse_loss(mse_pred, mse_target)
+                #regular = 0.0
                 output.ce_loss = ce_loss
-                output.mse_loss = mse_loss_val
+                #output.mse_loss = mse_loss_val
+                output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
                 #output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
                 output.loss = ce_loss
         return output
@@ -253,7 +266,9 @@ def compute_block_mask(L, state_run, device):
     j = torch.arange(L, device=device).unsqueeze(0)  # shape (1, L)
     # For rows with i < state_run-1, we want to mask all positions.
     # For i >= state_run-1, allowed positions are j in [state_run-1, i].
+    #TODO: change the mask back, but for now see what happens when 
     allowed = (i >= (state_run - 1)) & (j >= (state_run - 1)) & (j <= i)
+    #allowed = (i >= (state_run)) & (j >= (state_run)) & (j <= i)
     mask = torch.where(allowed, 0.0, -1e9)
     return mask
 
@@ -305,9 +320,17 @@ class TwoStageModel(nn.Module):
         # Module1 pass: get hidden states.
         out1 = self.module1(input_ids=input_ids, s_mask=s_mask, labels=labels,
                             return_hidden=True, mse_loss=False)
+        module1 = False
+        if module1: 
+            return SimpleNamespace(loss=out1.loss, ce_loss=out1.ce_loss, mse_loss=out1.mse_loss, logits=out1.logits)
         # Use module1's hidden states as override for s token positions.
         # --- Vectorized block extraction via unfold ---
         # (Assuming a fixed block length and step as follows:)
+        #TODO: Debugging by detaching all the hidden states
+        #out1.hidden_states.detach()
+        out1.hidden_states.detach()
+        #out1.hidden_states = torch.randn(out1.hidden_states.shape, requires_grad=False)
+
         L_block = self.text_run + 2 * self.state_run  # block length
         step = self.text_run + self.state_run           # sliding step
         blocks_hidden = out1.hidden_states.unfold(dimension=1, size=L_block, step=step)
@@ -325,10 +348,22 @@ class TwoStageModel(nn.Module):
         # --- New Block Mask ---
         # Build a block_mask of shape (L_block, L_block) that is the same for all blocks.
         block_mask = compute_block_mask(L_block, self.state_run, device=input_ids.device)
+        #print('block_mask:', block_mask)
         # Expand to shape (B*n_blocks, 1, L_block, L_block) as expected by module2.
         block_mask = block_mask.unsqueeze(0).unsqueeze(1).expand(B * n_blocks, 1, L_block, L_block)
         #print('flat_override_s:', flat_override_s.shape)
-        print('flat_override_s:', flat_override_s[:,0,0])
+        #print('flat_override_s:', flat_override_s[:,0,0])
+        #print('input_ids: ', flat_input_ids.shape)
+        #print('labels: ', flat_labels.shape)
+        #print('s_mask: ', flat_s_mask.shape)
+
+        #print('flat_override_s:', flat_override_s[:4,:,0])
+        #print('flat_override_s:', flat_override_s[:,0,0])
+        #print('input_ids: ', flat_input_ids[:4,:])
+        #print('labels: ', flat_labels[:4,:])
+        #print('s_mask: ', flat_s_mask[:4,:])
+
+
         
         # Process all blocks at once.
         out2 = self.module2(
