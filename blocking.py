@@ -247,7 +247,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 mse_target = embed_copy[:, B : L_block, :]
                 mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.0
+                regular = 0.1
                 output.ce_loss = ce_loss
                 output.mse_loss = mse_loss_val
                 #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -453,7 +453,7 @@ class PrintLossCallback(TrainerCallback):
         self.last_eval_loss = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.global_step % 1000 != 0:
+        if state.global_step % 100 != 0:
             return
         if logs is None:
             return
@@ -516,6 +516,25 @@ class CustomTrainer(Trainer):
         logs["ce_loss"] = ce_loss.item() if torch.is_tensor(ce_loss) else ce_loss
         logs["mse_loss"] = mse_loss.item() if torch.is_tensor(mse_loss) else mse_loss
         self.log(logs)
+
+        # Print every 10 steps.
+        if self.state.global_step % 10 == 0:
+            # Get current epoch progress.
+            current_epoch = self.state.epoch if self.state.epoch is not None else 0
+            total_epochs = self.args.num_train_epochs
+            
+            # Build a simple progress bar.
+            progress = current_epoch / total_epochs
+            bar_length = 30
+            filled_length = int(round(bar_length * progress))
+            bar = '=' * filled_length + '-' * (bar_length - filled_length)
+            
+            print(
+                f"Epoch progress: [{bar}] {current_epoch:.2f}/{total_epochs} "
+                f"| Step {self.state.global_step}: Loss: {logs['loss']:.4f}, "
+                f"CE Loss: {logs['ce_loss']:.4f}, MSE Loss: {logs['mse_loss']:.4f}"
+            )
+
         return loss.detach()
     
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
@@ -554,29 +573,6 @@ class CustomTrainer(Trainer):
         }
         print(f"Evaluation metrics: {metrics}")
         return metrics
-
-class StateTokenCheckCallback(TrainerCallback):
-    def __init__(self, tolerance=1e-6):
-        self.tolerance = tolerance
-        self.initial_state_token = None
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        # Save the initial module1.s_token
-        model = kwargs.get("model", None)
-        if model is None:
-            return
-        # Assuming the composite model has module1 as an attribute
-        self.initial_state_token = model.module1.s_token.clone().detach()
-        print("Saved initial module1.s_token.")
-
-    def on_step_end(self, args, state, control, **kwargs):
-        model = kwargs.get("model", None)
-        if model is None or self.initial_state_token is None:
-            return
-        current_token = model.module1.s_token.detach()
-        max_diff = (current_token - self.initial_state_token).abs().max().item()
-        if max_diff > self.tolerance:
-            print(f"Warning: module1.s_token has changed (max diff = {max_diff:.2e}) at step {state.global_step}.")
 
 
 # -----------------------------------------------------------------------------
@@ -690,12 +686,11 @@ def main():
         eval_dataset=valid_dataset,
         data_collator=collate_fn,
         tokenizer=tokenizer,
+        callbacks=[PrintLossCallback()]
     )
-    trainer.add_callback(PrintLossCallback())
-    
-    #debugging
-    state_token_check = StateTokenCheckCallback(tolerance=1e-6)
-    trainer.add_callback(state_token_check)
+    #trainer.add_callback(PrintLossCallback())
+    from transformers import ProgressCallback
+    trainer.remove_callback(ProgressCallback)
     
     trainer.train()
 
