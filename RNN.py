@@ -601,30 +601,32 @@ def build_override_tensor(current_state, L, module2):
     override_tensor[0, 0, :] = current_state
     return override_tensor
 
+
 def autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device):
     """
-    Performs autoregressive evaluation on a single sample.
+    Performs autoregressive evaluation on a single sample using parallel predictions
+    for the text tokens in each block. (This function assumes state_run = 1.)
     
-    For state_run = 1, it:
-      1. Uses module1 with a blank (s token only) input to produce s'_0.
-      2. Then for each block of text tokens (of size text_run):
-          - Uses teacher forcing with ground-truth text tokens to predict the next text token,
-            computing a CE loss on only the last prediction.
-          - At the end of a full block (if there are remaining tokens),
-            it calls module2 to predict a state token (without loss) which is used
-            as the starting state for the next block.
-    
+    Steps:
+      1. Use module1 (with a dummy input) to obtain the initial state token s'_0.
+      2. Process text tokens in blocks of size `text_run`:
+         - For the current block, build a batch of sequences where each sequence is:
+             [s-token placeholder] + the ground-truth prefix of the block.
+         - Pad all sequences to a common length.
+         - Set up labels so that only the final (non-padded) token in each sequence is active.
+         - Build a proper 4D attention mask that combines a causal mask with a padding mask.
+         - Run module2 once on the entire batch and accumulate the loss.
+         - If a full block was processed (and there are remaining tokens), predict the next state token serially.
     Returns:
-      total_loss: accumulated CE loss (a float).
-      token_count: number of text tokens for which loss was computed.
+      total_loss: Accumulated CE loss (a float).
+      token_count: Total number of text tokens (across blocks) that contributed to the loss.
     """
-    # Extract ground truth text tokens by filtering out s tokens.
+    # Extract ground truth text tokens (filter out s tokens)
     input_ids = sample["input_ids"].to(device)   # shape: (L_total,)
     s_mask = sample["s_mask"].to(device)           # shape: (L_total,)
-    # Text tokens are those where s_mask is False.
     text_tokens = input_ids[~s_mask].tolist()
     
-    # --- Step 1: Use module1 to get the initial state token s'_0.
+    # Step 1: Obtain the initial state s'_0 from module1 using a dummy input.
     dummy_input_ids = torch.tensor([[-1]], dtype=torch.long, device=device)
     dummy_s_mask = torch.tensor([[True]], dtype=torch.bool, device=device)
     with torch.no_grad():
@@ -635,98 +637,120 @@ def autoregressive_evaluation_sample(composite_model, sample, text_run, state_ru
             return_hidden=True,
             mse_loss=False
         )
-    # s'_0 is taken as the hidden state for the single token.
     s_prev = out1.hidden_states[0, 0, :]  # shape: (hidden_dim,)
     s_prev = s_prev.unsqueeze(0)  # shape: (1, hidden_dim)
     
     total_loss = 0.0
     token_count = 0
-    current_state = s_prev  # This will be updated after each full block.
+    current_state = s_prev  # Will be updated after each block.
     k = text_run         # Number of text tokens per block.
     T = len(text_tokens)
     block_start = 0
 
-    # Process the text tokens block-by-block.
     while block_start < T:
         block_end = min(block_start + k, T)
-        # For each text token in the block, use teacher forcing.
-        for i in range(block_start, block_end):
-            # Build input sequence: [s-token placeholder] + ground truth tokens from this block up to i.
-            # Here, we use -1 for s tokens.
-            seq_tokens = [-1] + text_tokens[block_start:i+1]
-            L_seq = len(seq_tokens)
-            input_ids_seq = torch.tensor([seq_tokens], dtype=torch.long, device=device)  # shape: (1, L_seq)
-            # s_mask: first token is True (state), rest are False.
-            s_mask_seq = torch.tensor([[True] + [False]*(L_seq - 1)], dtype=torch.bool, device=device)
-            # Create labels so that only the last token prediction is active.
-            # For an input sequence of length L_seq, the forward method shifts:
-            # predictions for positions 0...L_seq-2 are compared to labels[1...L_seq-1].
-            # We set labels for all positions except the last to -100.
-            labels_seq = [-100]*(L_seq - 1) + [text_tokens[i]]
-            labels_seq = torch.tensor([labels_seq], dtype=torch.long, device=device)
-            # Build override tensor: override only the first s token with current_state.
-            override_tensor = build_override_tensor(current_state, L_seq, composite_model.module2)
-            with torch.no_grad():
-                out2 = composite_model.module2(
-                    input_ids=input_ids_seq,
-                    s_mask=s_mask_seq,
-                    override_s=override_tensor,
-                    labels=labels_seq,
-                    attention_mask=None,
-                    mse_loss=False  # Standard next-token prediction.
-                )
-            # out2.ce_loss is computed only on the last token (because of our labels).
-            loss = out2.ce_loss.item()
-            total_loss += loss
-            token_count += 1
+        block_text = text_tokens[block_start:block_end]
+        B = len(block_text)  # Number of text tokens in this block
+        max_len = B + 1      # Each sequence: [s token] + prefix of length 1..B
+        
+        batch_input_ids = []
+        batch_s_mask = []
+        batch_labels = []
+        # Build a batch for the block.
+        for i in range(B):
+            seq = [-1] + block_text[:i+1]   # sequence for predicting token i
+            L_seq = len(seq)
+            pad_length = max_len - L_seq
+            # Use 0 as pad token.
+            padded_seq = seq + [0] * pad_length
+            batch_input_ids.append(padded_seq)
+            # s_mask: first token is True; rest are False for real tokens; padded positions are False.
+            s_mask_seq = [True] + [False]*(L_seq - 1) + [False]*pad_length
+            batch_s_mask.append(s_mask_seq)
+            # Labels: Only the last non-padded token is active.
+            labels_seq = [-100]*(L_seq - 1) + [block_text[i]] + [-100]*pad_length
+            batch_labels.append(labels_seq)
+        
+        # Convert lists to tensors.
+        batch_input_ids = torch.tensor(batch_input_ids, dtype=torch.long, device=device)
+        batch_s_mask = torch.tensor(batch_s_mask, dtype=torch.bool, device=device)
+        batch_labels = torch.tensor(batch_labels, dtype=torch.long, device=device)
+        
+        # Build the 4D attention mask.
+        # Create a causal mask of shape (max_len, max_len).
+        causal_mask = torch.tril(torch.ones((max_len, max_len), device=device))
+        # Create a padding mask: 1 for non-pad tokens, 0 for pad tokens.
+        # Our pad token is 0.
+        padding_mask = (batch_input_ids != 0).float()  # shape: (B, max_len)
+        # Expand padding_mask to shape (B, 1, 1, max_len)
+        padding_mask = padding_mask.unsqueeze(1).unsqueeze(2)
+        # Expand causal_mask to shape (1, 1, max_len, max_len)
+        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+        # The final attention mask: allowed positions are those where both are 1.
+        attn_mask = causal_mask * padding_mask  # shape: (B, 1, max_len, max_len)
+        # Convert to additive mask: positions that are not allowed get -1e9.
+        attn_mask = (1.0 - attn_mask) * -1e9
+        
+        # Build the override tensor from current_state.
+        override_tensor = build_override_tensor(current_state, max_len, composite_model.module2)
+        override_tensor = override_tensor.expand(batch_input_ids.shape[0], -1, -1)
+        
+        # Run module2 on the entire batch.
+        with torch.no_grad():
+            out2 = composite_model.module2(
+                input_ids=batch_input_ids,
+                s_mask=batch_s_mask,
+                override_s=override_tensor,
+                labels=batch_labels,
+                attention_mask=attn_mask,
+                mse_loss=False  # Standard next-token prediction.
+            )
+        # The output ce_loss is averaged over the B active predictions.
+        block_loss = out2.ce_loss.item() * B
+        total_loss += block_loss
+        token_count += B
 
-        # If a full block was processed and more tokens remain,
-        # predict the next state token to use as the initial state for the next block.
-        if (block_end - block_start == k) and (block_end < T):
-            # Build input for state token prediction:
-            # Input sequence: [s-token placeholder] + all k text tokens from the block + a final s-token placeholder.
-            seq_tokens = [-1] + text_tokens[block_start:block_end] + [-1]
-            L_seq = len(seq_tokens)
-            input_ids_seq = torch.tensor([seq_tokens], dtype=torch.long, device=device)
-            # s_mask: first token is True, then k False for text tokens, and last token is True.
-            s_mask_seq = torch.tensor([[True] + [False]*k + [True]], dtype=torch.bool, device=device)
-            # Labels: all -100 since we do not compute any loss here.
-            labels_seq = torch.tensor([[-100]*L_seq], dtype=torch.long, device=device)
-            # Build override tensor for this sequence.
-            override_tensor = build_override_tensor(current_state, L_seq, composite_model.module2)
+        # If a full block was processed and more tokens remain, predict the next state token serially.
+        if (B == k) and (block_end < T):
+            seq_tokens = [-1] + block_text + [-1]
+            L_seq_state = len(seq_tokens)
+            input_ids_state = torch.tensor([seq_tokens], dtype=torch.long, device=device)
+            s_mask_state = torch.tensor([[True] + [False]*k + [True]], dtype=torch.bool, device=device)
+            labels_state = torch.tensor([[-100]*L_seq_state], dtype=torch.long, device=device)
+            override_tensor_state = build_override_tensor(current_state, L_seq_state, composite_model.module2)
             with torch.no_grad():
-                out2 = composite_model.module2(
-                    input_ids=input_ids_seq,
-                    s_mask=s_mask_seq,
-                    override_s=override_tensor,
-                    labels=labels_seq,
+                out_state = composite_model.module2(
+                    input_ids=input_ids_state,
+                    s_mask=s_mask_state,
+                    override_s=override_tensor_state,
+                    labels=labels_state,
                     attention_mask=None,
                     mse_loss=False,
                     return_hidden=True
                 )
-            # Use the hidden state corresponding to the last token as the new state.
-            new_state = out2.hidden_states[0, -1, :].unsqueeze(0)  # shape: (1, hidden_dim)
+            new_state = out_state.hidden_states[0, -1, :].unsqueeze(0)
             current_state = new_state
+
         block_start += k
     return total_loss, token_count
 
 def run_autoregressive_evaluation(composite_model, eval_dataset, text_run, state_run, device):
     """
-    Runs the autoregressive evaluation over an entire evaluation dataset.
-    It computes the average cross entropy loss per text token and the corresponding perplexity.
+    Runs the parallel autoregressive evaluation over an entire evaluation dataset.
+    Returns the average CE loss per text token and the corresponding perplexity.
     """
     composite_model.eval()
     total_loss = 0.0
     total_tokens = 0
-    # Use a simple loop over the evaluation dataset.
     for sample in eval_dataset:
         loss, token_count = autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device)
         total_loss += loss
         total_tokens += token_count
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
     ppl = math.exp(avg_loss)
-    print(f"\nAutoregressive Evaluation -> Avg CE Loss per token: {avg_loss:.4f}, Perplexity: {ppl:.4f}")
+    print(f"\nAutoregressive Evaluation (Parallel) -> Avg CE Loss per token: {avg_loss:.4f}, Perplexity: {ppl:.4f}")
     return avg_loss, ppl
+
 
 # -----------------------------------------------------------------------------
 # (Optional) You can call run_autoregressive_evaluation after training.
@@ -789,12 +813,15 @@ def main():
                                            text_run=args.text_run, state_run=args.state_run)
 
     from torch.utils.data import Subset
-    valid_dataset = Subset(valid_dataset, list(range(1)))
+    #valid_dataset = Subset(valid_dataset, list(range(1)))
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate_fn, num_workers=8)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False,
                               collate_fn=collate_fn, num_workers=8)
+    for batch_idx, batch in enumerate(valid_loader):
+        input_ids = batch['input_ids']  # Unpack the batch
+        print(f"Batch {batch_idx} input size: {input_ids.size()}")
 
     
 
@@ -833,7 +860,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=10,
+        eval_steps=100,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
