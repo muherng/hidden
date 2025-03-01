@@ -51,6 +51,7 @@ class TextWithSTokenDataset(Dataset):
 
         # Load dataset (using WikiText-2 for a smaller corpus here).
         self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
 
         # Pre-tokenize the dataset.
         def tokenize_fn(examples):
@@ -205,16 +206,16 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
         output = CausalLMOutput(logits=logits)
         if return_hidden:
             output.hidden_states = hidden_states
-            ce_logits = logits[:, 0 : 1, :]  # shape: (batch, tr, vocab)
-            ce_targets = labels[:, 1 : 2]             # shape: (batch, tr)
-            ce_loss = F.cross_entropy(
-                ce_logits.reshape(-1, self.vocab_size),
-                ce_targets.reshape(-1),
-                ignore_index=-100
-            )
-            output.loss = ce_loss
-            output.ce_loss = ce_loss
-            output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
+            #ce_logits = logits[:, 0 : 1, :]  # shape: (batch, tr, vocab)
+            #ce_targets = labels[:, 1 : 2]             # shape: (batch, tr)
+            #ce_loss = F.cross_entropy(
+            #    ce_logits.reshape(-1, self.vocab_size),
+            #    ce_targets.reshape(-1),
+            #    ignore_index=-100
+            #)
+            #output.loss = ce_loss
+            #output.ce_loss = ce_loss
+            #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
         if labels is not None and not return_hidden:
             # If state_run==0 or we are not in block mode, use standard next-token prediction.
             if self.state_run == 0 or not mse_loss:
@@ -243,15 +244,15 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                     ignore_index=-100
                 )
                 # MSE region: predictions from indices [B-1, L_block-2] to predict targets at [B, L_block-1].
-                #mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
-                #mse_target = embed_copy[:, B : L_block, :]
-                #mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.5
+                mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
+                mse_target = embed_copy[:, B : L_block, :]
+                mse_loss_val = F.mse_loss(mse_pred, mse_target)
+                regular = 0.0
                 output.ce_loss = ce_loss
-                #output.mse_loss = mse_loss_val
-                output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
-                #output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
-                output.loss = ce_loss
+                output.mse_loss = mse_loss_val
+                #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
+                output.loss = (1 - regular) * ce_loss + regular * mse_loss_val
+                #output.loss = ce_loss
         return output
 
 
@@ -452,7 +453,7 @@ class PrintLossCallback(TrainerCallback):
         self.last_eval_loss = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.global_step % 10 != 0:
+        if state.global_step % 1000 != 0:
             return
         if logs is None:
             return
@@ -631,10 +632,11 @@ def main():
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False,
                               collate_fn=collate_fn, num_workers=8)
 
+    n_pos = args.state_run + (args.text_run + args.state_run)*args.seq_len 
     # Instantiate module1.
     config1 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
-        n_positions=2048,
+        n_positions= n_pos,
         n_embd=args.hidden,       
         n_layer=args.layers,        
         n_head=args.heads,
@@ -647,7 +649,7 @@ def main():
     # Instantiate module2.
     config2 = NoExtraLayerSTokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
-        n_positions=2048,
+        n_positions=n_pos,
         n_embd=args.hidden,       
         n_layer=args.layers,        
         n_head=args.heads,
@@ -665,7 +667,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=10000,
+        eval_steps=100,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
