@@ -247,7 +247,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 mse_target = embed_copy[:, B : L_block, :]
                 mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.1
+                regular = 0.05
                 output.ce_loss = ce_loss
                 output.mse_loss = mse_loss_val
                 #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -554,9 +554,9 @@ class CustomTrainer(Trainer):
         return (loss, logits, inputs.get("labels"), extra)
     
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        print('EVAL DATASET: ', eval_dataset)
-        #eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        eval_dataloader = self.get_eval_dataloader(None)
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
         losses, ce_losses, mse_losses = [], [], []
         for inputs in eval_dataloader:
             loss, logits, labels, extra = self.prediction_step(
@@ -573,8 +573,171 @@ class CustomTrainer(Trainer):
             "eval_mse_loss": mean_mse,
             "eval_ppl": np.exp(mean_ce) if mean_ce > 0 else float('inf')
         }
+        # ---- Call the new autoregressive evaluation helper ----
+        # Use the device from the model parameters.
+        device = next(self.model.parameters()).device
+        # self.model.text_run and self.model.state_run are assumed to be set.
+        auto_loss, auto_ppl = run_autoregressive_evaluation(
+            self.model, eval_dataset, self.model.text_run, self.model.state_run, device
+        )
+        metrics["auto_eval_loss"] = auto_loss
+        metrics["auto_eval_ppl"] = auto_ppl
+        # -----------------------------------------------------------
+        
         print(f"Evaluation metrics: {metrics}")
         return metrics
+
+# -----------------------------------------------------------------------------
+# Additional Evaluation Helpers for Autoregressive Evaluation
+# -----------------------------------------------------------------------------
+def build_override_tensor(current_state, L, module2):
+    """
+    Build an override tensor of shape (1, L, hidden_dim) for module2.
+    It uses module2.s_token as the default but overrides the first token
+    with the provided current_state.
+    """
+    # Get default s_token expanded.
+    override_tensor = module2.s_token.unsqueeze(0).unsqueeze(0).expand(1, L, module2.hidden_dim).clone()
+    override_tensor[0, 0, :] = current_state
+    return override_tensor
+
+def autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device):
+    """
+    Performs autoregressive evaluation on a single sample.
+    
+    For state_run = 1, it:
+      1. Uses module1 with a blank (s token only) input to produce s'_0.
+      2. Then for each block of text tokens (of size text_run):
+          - Uses teacher forcing with ground-truth text tokens to predict the next text token,
+            computing a CE loss on only the last prediction.
+          - At the end of a full block (if there are remaining tokens),
+            it calls module2 to predict a state token (without loss) which is used
+            as the starting state for the next block.
+    
+    Returns:
+      total_loss: accumulated CE loss (a float).
+      token_count: number of text tokens for which loss was computed.
+    """
+    # Extract ground truth text tokens by filtering out s tokens.
+    input_ids = sample["input_ids"].to(device)   # shape: (L_total,)
+    s_mask = sample["s_mask"].to(device)           # shape: (L_total,)
+    # Text tokens are those where s_mask is False.
+    text_tokens = input_ids[~s_mask].tolist()
+    
+    # --- Step 1: Use module1 to get the initial state token s'_0.
+    dummy_input_ids = torch.tensor([[-1]], dtype=torch.long, device=device)
+    dummy_s_mask = torch.tensor([[True]], dtype=torch.bool, device=device)
+    with torch.no_grad():
+        out1 = composite_model.module1(
+            input_ids=dummy_input_ids,
+            s_mask=dummy_s_mask,
+            labels=None,
+            return_hidden=True,
+            mse_loss=False
+        )
+    # s'_0 is taken as the hidden state for the single token.
+    s_prev = out1.hidden_states[0, 0, :]  # shape: (hidden_dim,)
+    s_prev = s_prev.unsqueeze(0)  # shape: (1, hidden_dim)
+    
+    total_loss = 0.0
+    token_count = 0
+    current_state = s_prev  # This will be updated after each full block.
+    k = text_run         # Number of text tokens per block.
+    T = len(text_tokens)
+    block_start = 0
+
+    # Process the text tokens block-by-block.
+    while block_start < T:
+        block_end = min(block_start + k, T)
+        # For each text token in the block, use teacher forcing.
+        for i in range(block_start, block_end):
+            # Build input sequence: [s-token placeholder] + ground truth tokens from this block up to i.
+            # Here, we use -1 for s tokens.
+            seq_tokens = [-1] + text_tokens[block_start:i+1]
+            L_seq = len(seq_tokens)
+            input_ids_seq = torch.tensor([seq_tokens], dtype=torch.long, device=device)  # shape: (1, L_seq)
+            # s_mask: first token is True (state), rest are False.
+            s_mask_seq = torch.tensor([[True] + [False]*(L_seq - 1)], dtype=torch.bool, device=device)
+            # Create labels so that only the last token prediction is active.
+            # For an input sequence of length L_seq, the forward method shifts:
+            # predictions for positions 0...L_seq-2 are compared to labels[1...L_seq-1].
+            # We set labels for all positions except the last to -100.
+            labels_seq = [-100]*(L_seq - 1) + [text_tokens[i]]
+            labels_seq = torch.tensor([labels_seq], dtype=torch.long, device=device)
+            # Build override tensor: override only the first s token with current_state.
+            override_tensor = build_override_tensor(current_state, L_seq, composite_model.module2)
+            with torch.no_grad():
+                out2 = composite_model.module2(
+                    input_ids=input_ids_seq,
+                    s_mask=s_mask_seq,
+                    override_s=override_tensor,
+                    labels=labels_seq,
+                    attention_mask=None,
+                    mse_loss=False  # Standard next-token prediction.
+                )
+            # out2.ce_loss is computed only on the last token (because of our labels).
+            loss = out2.ce_loss.item()
+            total_loss += loss
+            token_count += 1
+
+        # If a full block was processed and more tokens remain,
+        # predict the next state token to use as the initial state for the next block.
+        if (block_end - block_start == k) and (block_end < T):
+            # Build input for state token prediction:
+            # Input sequence: [s-token placeholder] + all k text tokens from the block + a final s-token placeholder.
+            seq_tokens = [-1] + text_tokens[block_start:block_end] + [-1]
+            L_seq = len(seq_tokens)
+            input_ids_seq = torch.tensor([seq_tokens], dtype=torch.long, device=device)
+            # s_mask: first token is True, then k False for text tokens, and last token is True.
+            s_mask_seq = torch.tensor([[True] + [False]*k + [True]], dtype=torch.bool, device=device)
+            # Labels: all -100 since we do not compute any loss here.
+            labels_seq = torch.tensor([[-100]*L_seq], dtype=torch.long, device=device)
+            # Build override tensor for this sequence.
+            override_tensor = build_override_tensor(current_state, L_seq, composite_model.module2)
+            with torch.no_grad():
+                out2 = composite_model.module2(
+                    input_ids=input_ids_seq,
+                    s_mask=s_mask_seq,
+                    override_s=override_tensor,
+                    labels=labels_seq,
+                    attention_mask=None,
+                    mse_loss=False,
+                    return_hidden=True
+                )
+            # Use the hidden state corresponding to the last token as the new state.
+            new_state = out2.hidden_states[0, -1, :].unsqueeze(0)  # shape: (1, hidden_dim)
+            current_state = new_state
+        block_start += k
+    return total_loss, token_count
+
+def run_autoregressive_evaluation(composite_model, eval_dataset, text_run, state_run, device):
+    """
+    Runs the autoregressive evaluation over an entire evaluation dataset.
+    It computes the average cross entropy loss per text token and the corresponding perplexity.
+    """
+    composite_model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    # Use a simple loop over the evaluation dataset.
+    for sample in eval_dataset:
+        loss, token_count = autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device)
+        total_loss += loss
+        total_tokens += token_count
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
+    ppl = math.exp(avg_loss)
+    print(f"\nAutoregressive Evaluation -> Avg CE Loss per token: {avg_loss:.4f}, Perplexity: {ppl:.4f}")
+    return avg_loss, ppl
+
+# -----------------------------------------------------------------------------
+# (Optional) You can call run_autoregressive_evaluation after training.
+# For example, add the following lines at the end of your main() function:
+
+#     trainer.train()
+#     
+#     # After training, run the autoregressive evaluation.
+#     print("Running autoregressive evaluation on the validation set:")
+#     run_autoregressive_evaluation(composite_model, valid_dataset, args.text_run, args.state_run, device)
+
 
 
 # -----------------------------------------------------------------------------
@@ -625,10 +788,15 @@ def main():
     valid_dataset = TextWithSTokenDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len,
                                            text_run=args.text_run, state_run=args.state_run)
 
+    from torch.utils.data import Subset
+    valid_dataset = Subset(valid_dataset, list(range(1)))
+
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate_fn, num_workers=8)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False,
                               collate_fn=collate_fn, num_workers=8)
+
+    
 
     n_pos = args.state_run + (args.text_run + args.state_run)*args.seq_len 
     # Instantiate module1.
