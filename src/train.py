@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--log_interval", type=int, default=1, help="iterations between logging")
     parser.add_argument("--eval_iters", type=int, default=200, help="number of iterations for evaluation")
     parser.add_argument("--eval_only", action="store_true", help="run evaluation only and exit")
+    parser.add_argument("--full_eval", action="store_true", help="run full evaluation on the val set")
     parser.add_argument("--always_save_checkpoint", action="store_true", help="save checkpoint even if not the best loss")
     # Data settings
     parser.add_argument("--tokenizer", type=str, default="gpt2", help="tokenizer name")
@@ -95,18 +96,24 @@ def load_wikitext_tokens(split, args):
     tokenizer, vocab_size = get_tokenizer(args.tokenizer)
     token_ids = tokenizer.encode(all_text)
     tokens_tensor = torch.tensor(token_ids, dtype=torch.long)
-
     n_chunks = tokens_tensor.numel() // args.block_size
+    print(f"=> Size of {split} split: {tokens_tensor.size(0)} tokens")
     tokens_tensor = tokens_tensor[:n_chunks * args.block_size].view(n_chunks, args.block_size)
     
     return tokens_tensor
 
 def prepare_data(args):
     global wikitext_train, wikitext_val
-    print("Loading WikiText-2 train split...")
+    print("=> Loading WikiText-2 train split...")
     wikitext_train = load_wikitext_tokens("train", args)
-    print("Loading WikiText-2 validation split...")
+    print("=> Loading WikiText-2 validation split...")
     wikitext_val = load_wikitext_tokens("validation", args)
+
+    #
+    num_batches = math.ceil(wikitext_train.size(0) // args.batch_size)
+    num_epochs = args.max_iters / num_batches
+    print(f"=> Training for approximately {num_epochs:.2f} epochs "
+      f"({args.max_iters} iterations over {num_batches} steps per epoch)")
 
 
 def get_batch(split, args, device):
@@ -135,24 +142,36 @@ def estimate_metrics(model, args, device, ctx, splits = ['train', 'val']):
     out = {'loss': {}, 'perplexity': {}, 'accuracy': {}, 'bits/token': {}}
     model.eval()
     for split in splits:
-        losses = torch.zeros(args.eval_iters)
-        perpl_s = torch.zeros(args.eval_iters)
-        acc_s = torch.zeros(args.eval_iters)
-        bpt_s = torch.zeros(args.eval_iters)
+        tot_loss, tot_perpl, tot_corr, tot_bpt = 0.0, 0.0, 0.0, 0.0
+        tot = 0
 
-        for k in range(args.eval_iters):
-            X, Y = get_batch(split, args, device)
+        ds = wikitext_train if split == "train" else wikitext_val
+        if split == 'val':
+            steps = ds.size(0) // args.batch_size if args.full_eval else args.eval_iters
+        else:
+            steps = args.eval_iters
+        
+        for k in range(steps):
+            if split == "train" or (split == "val" and not args.full_eval):
+                X, Y = get_batch(split, args, device)
+            else:
+                X = ds[k * args.batch_size: (k + 1) * args.batch_size, :] # bs, seq
+                Y = torch.zeros_like(X)
+                Y[:, :-1] = X[:, 1:]
+                Y[:, -1] = X[:, 0]  # or you could use a padding token
+                X, Y = X.to(device), Y.to(device)
             with ctx:
                 logits, loss = model(X, Y)
-            losses[k] = loss.item()
-            perpl_s[k] = torch.exp(loss).item()
-            acc_s[k] = logits.argmax(dim=-1).eq(Y).float().mean().item()
-            bpt_s[k] = loss.item() / math.log(2)  # converting nats to bits
-
-        out['loss'][split] = losses.mean().item()
-        out['perplexity'][split] = perpl_s.mean().item()
-        out['accuracy'][split] = acc_s.mean().item()
-        out['bits/token'][split] = bpt_s.mean().item()
+            tot_loss += loss.item()
+            tot_perpl += torch.exp(loss).item()
+            tot_corr += logits.argmax(dim=-1).eq(Y).float().sum().item()
+            tot_bpt += loss.item() / math.log(2)  # converting nats to bits
+            tot += X.numel()
+ 
+        out['loss'][split] = tot_loss / steps
+        out['perplexity'][split] = tot_perpl / steps
+        out['accuracy'][split] = tot_corr / tot
+        out['bits/token'][split] = tot_bpt / steps
 
     model.train()
     return out
@@ -290,9 +309,10 @@ def main():
 
         # Evaluate and checkpoint periodically
         if iter_num % args.eval_interval == 0:
-            metrics = estimate_metrics(model, args, device, ctx)
-            tr_log = ' | '.join([f"train_{k} {v['train']:.4f}" for k, v in metrics.items()])
-            val_log = ' | '.join([f"val_{k} {v['val']:.4f}" for k, v in metrics.items()])
+            splits = ['train', 'val']
+            metrics = estimate_metrics(model, args, device, ctx, splits)
+            tr_log = ' | '.join([f"train_{k} {v['train']:.4f}" for k, v in metrics.items()]) if 'train' in splits else ''
+            val_log = ' | '.join([f"val_{k} {v['val']:.4f}" for k, v in metrics.items()]) if 'val' in splits else ''
 
             if not args.nowandb:
                 wandb.log({**metrics, "lr": lr})
@@ -337,12 +357,17 @@ def main():
         dt = t1 - t0
         t0 = t1
         lossf = loss.item() * args.gradient_accumulation_steps
+        perpf = torch.exp(loss).item()
+        accf = logits.argmax(dim=-1).eq(Y).float().mean().item()
+        bptf = lossf / math.log(2)
         if local_iter_num >= 5:
             # Here you can add your own metric computation (e.g., mfu estimation)
             pass
         if iter_num % args.log_interval == 0:
             print(f"Iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+            # print(f"Iter {iter_num}: loss {lossf:.4f}, perp {perpf:.4f}, acc {accf:.4f}, bpt {bptf:.4f}, time {dt*1000:.2f}ms")
             if not args.nowandb:
+                # tr_metrics = {'loss.train': lossf, 'perplexity.train': perpf, 'accuracy.train': accf, 'bits/token.train': bptf}
                 wandb.log({"loss": lossf, "time_ms": dt*1000})
 
         iter_num += 1
