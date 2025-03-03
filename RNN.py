@@ -602,33 +602,27 @@ def build_override_tensor(current_state, L, module2):
     return override_tensor
 
 
-def autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device):
+def autoregressive_evaluation_batch(composite_model, batch, text_run, state_run, device):
     """
-    Performs autoregressive evaluation on a single sample using parallel predictions
-    for the text tokens in each block. (This function assumes state_run = 1.)
-    
-    Steps:
-      1. Use module1 (with a dummy input) to obtain the initial state token s'_0.
-      2. Process text tokens in blocks of size `text_run`:
-         - For the current block, build a batch of sequences where each sequence is:
-             [s-token placeholder] + the ground-truth prefix of the block.
-         - Pad all sequences to a common length.
-         - Set up labels so that only the final (non-padded) token in each sequence is active.
-         - Build a proper 4D attention mask that combines a causal mask with a padding mask.
-         - Run module2 once on the entire batch and accumulate the loss.
-         - If a full block was processed (and there are remaining tokens), predict the next state token serially.
-    Returns:
-      total_loss: Accumulated CE loss (a float).
-      token_count: Total number of text tokens (across blocks) that contributed to the loss.
+    Performs autoregressive evaluation over a batch of samples in parallel.
+    Assumes that every sample (after filtering out s tokens) has the same number of text tokens.
     """
-    # Extract ground truth text tokens (filter out s tokens)
-    input_ids = sample["input_ids"].to(device)   # shape: (L_total,)
-    s_mask = sample["s_mask"].to(device)           # shape: (L_total,)
-    text_tokens = input_ids[~s_mask].tolist()
+    # Extract input_ids and s_mask from the batch (assumed shape: (B, L_total))
+    input_ids = batch["input_ids"].to(device)
+    s_mask = batch["s_mask"].to(device)
+    B = input_ids.shape[0]
     
-    # Step 1: Obtain the initial state s'_0 from module1 using a dummy input.
-    dummy_input_ids = torch.tensor([[-1]], dtype=torch.long, device=device)
-    dummy_s_mask = torch.tensor([[True]], dtype=torch.bool, device=device)
+    # For each sample, extract the ground-truth text tokens (i.e. non-s tokens).
+    # (Assumes each sample has the same number of text tokens, T.)
+    text_tokens = []
+    for i in range(B):
+        tokens = input_ids[i][~s_mask[i]].tolist()
+        text_tokens.append(tokens)
+    T = len(text_tokens[0])
+    
+    # Step 1: Compute the initial state for each sample in parallel using module1.
+    dummy_input_ids = torch.full((B, 1), -1, dtype=torch.long, device=device)
+    dummy_s_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
     with torch.no_grad():
         out1 = composite_model.module1(
             input_ids=dummy_input_ids,
@@ -637,118 +631,140 @@ def autoregressive_evaluation_sample(composite_model, sample, text_run, state_ru
             return_hidden=True,
             mse_loss=False
         )
-    s_prev = out1.hidden_states[0, 0, :]  # shape: (hidden_dim,)
-    s_prev = s_prev.unsqueeze(0)  # shape: (1, hidden_dim)
-    
+    # current_state: shape (B, hidden_dim)
+    current_state = out1.hidden_states[:, 0, :]
+
     total_loss = 0.0
     token_count = 0
-    current_state = s_prev  # Will be updated after each block.
-    k = text_run         # Number of text tokens per block.
-    T = len(text_tokens)
-    block_start = 0
+    pointer = 0   # pointer into each sample’s text tokens
+    k = text_run # block size
 
-    while block_start < T:
-        block_end = min(block_start + k, T)
-        block_text = text_tokens[block_start:block_end]
-        B = len(block_text)  # Number of text tokens in this block
-        max_len = B + 1      # Each sequence: [s token] + prefix of length 1..B
+    while pointer < T:
+        # For the current block, determine the number of tokens to process (may be less than k)
+        block_size = min(k, T - pointer)
+        max_seq_len = block_size + 1  # Each sequence is: [s-token] + a prefix of the block
         
-        batch_input_ids = []
-        batch_s_mask = []
-        batch_labels = []
-        # Build a batch for the block.
+        # Build lists that will hold the sequences from every sample in the batch.
+        batch_input_ids_block = []
+        batch_s_mask_block = []
+        batch_labels_block = []
+        sample_indices = []  # to know which sequence came from which sample
+        
+        # For each sample in the batch, create sequences for each prefix of its block.
         for i in range(B):
-            seq = [-1] + block_text[:i+1]   # sequence for predicting token i
-            L_seq = len(seq)
-            pad_length = max_len - L_seq
-            # Use 0 as pad token.
-            padded_seq = seq + [0] * pad_length
-            batch_input_ids.append(padded_seq)
-            # s_mask: first token is True; rest are False for real tokens; padded positions are False.
-            s_mask_seq = [True] + [False]*(L_seq - 1) + [False]*pad_length
-            batch_s_mask.append(s_mask_seq)
-            # Labels: Only the last non-padded token is active.
-            labels_seq = [-100]*(L_seq - 1) + [block_text[i]] + [-100]*pad_length
-            batch_labels.append(labels_seq)
+            block_text = text_tokens[i][pointer:pointer + block_size]
+            for j in range(len(block_text)):
+                # Sequence for predicting token j in the block:
+                # [s-token placeholder] + first (j+1) tokens of the block.
+                seq = [-1] + block_text[:j+1]
+                pad_length = max_seq_len - len(seq)
+                padded_seq = seq + [0] * pad_length  # use 0 as the pad token
+                batch_input_ids_block.append(padded_seq)
+                # s_mask: mark the first token as s-token, rest are not.
+                s_mask_seq = [True] + [False] * (len(seq) - 1) + [False] * pad_length
+                batch_s_mask_block.append(s_mask_seq)
+                # Labels: Only the last non-padded token is active (others set to -100)
+                labels_seq = [-100] * (len(seq) - 1) + [block_text[j]] + [-100] * pad_length
+                batch_labels_block.append(labels_seq)
+                sample_indices.append(i)
         
         # Convert lists to tensors.
-        batch_input_ids = torch.tensor(batch_input_ids, dtype=torch.long, device=device)
-        batch_s_mask = torch.tensor(batch_s_mask, dtype=torch.bool, device=device)
-        batch_labels = torch.tensor(batch_labels, dtype=torch.long, device=device)
+        batch_input_ids_block = torch.tensor(batch_input_ids_block, dtype=torch.long, device=device)
+        batch_s_mask_block = torch.tensor(batch_s_mask_block, dtype=torch.bool, device=device)
+        batch_labels_block = torch.tensor(batch_labels_block, dtype=torch.long, device=device)
         
-        # Build the 4D attention mask.
-        # Create a causal mask of shape (max_len, max_len).
-        causal_mask = torch.tril(torch.ones((max_len, max_len), device=device))
-        # Create a padding mask: 1 for non-pad tokens, 0 for pad tokens.
-        # Our pad token is 0.
-        padding_mask = (batch_input_ids != 0).float()  # shape: (B, max_len)
-        # Expand padding_mask to shape (B, 1, 1, max_len)
-        padding_mask = padding_mask.unsqueeze(1).unsqueeze(2)
-        # Expand causal_mask to shape (1, 1, max_len, max_len)
-        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
-        # The final attention mask: allowed positions are those where both are 1.
-        attn_mask = causal_mask * padding_mask  # shape: (B, 1, max_len, max_len)
-        # Convert to additive mask: positions that are not allowed get -1e9.
-        attn_mask = (1.0 - attn_mask) * -1e9
+        # Build the 4D attention mask (combining causal and padding masks).
+        L = max_seq_len
+        causal_mask = torch.tril(torch.ones((L, L), device=device)).unsqueeze(0).unsqueeze(0)
+        padding_mask = (batch_input_ids_block != 0).float().unsqueeze(1).unsqueeze(2)
+        attn_mask = (1.0 - causal_mask * padding_mask) * -1e9
         
-        # Build the override tensor from current_state.
-        override_tensor = build_override_tensor(current_state, max_len, composite_model.module2)
-        override_tensor = override_tensor.expand(batch_input_ids.shape[0], -1, -1)
+        # Build the override tensor for each sequence.
+        # For each sequence, use the current state of its corresponding sample.
+        override_list = []
+        for idx in sample_indices:
+            # build_override_tensor expects a tensor of shape (1, hidden_dim)
+            override_tensor = build_override_tensor(current_state[idx].unsqueeze(0), L, composite_model.module2)
+            override_list.append(override_tensor.squeeze(0))
+        override_tensor = torch.stack(override_list, dim=0)  # shape: (num_seq, L, hidden_dim)
         
-        # Run module2 on the entire batch.
+        # Run module2 on the entire batch for this block.
         with torch.no_grad():
             out2 = composite_model.module2(
-                input_ids=batch_input_ids,
-                s_mask=batch_s_mask,
+                input_ids=batch_input_ids_block,
+                s_mask=batch_s_mask_block,
                 override_s=override_tensor,
-                labels=batch_labels,
+                labels=batch_labels_block,
                 attention_mask=attn_mask,
-                mse_loss=False  # Standard next-token prediction.
+                mse_loss=False
             )
-        # The output ce_loss is averaged over the B active predictions.
-        block_loss = out2.ce_loss.item() * B
+        # Each sequence produces one prediction (the active token); count them.
+        num_predictions = len(sample_indices)
+        block_loss = out2.ce_loss.item() * num_predictions
         total_loss += block_loss
-        token_count += B
+        token_count += num_predictions
 
-        # If a full block was processed and more tokens remain, predict the next state token serially.
-        if (B == k) and (block_end < T):
-            seq_tokens = [-1] + block_text + [-1]
-            L_seq_state = len(seq_tokens)
-            input_ids_state = torch.tensor([seq_tokens], dtype=torch.long, device=device)
-            s_mask_state = torch.tensor([[True] + [False]*k + [True]], dtype=torch.bool, device=device)
-            labels_state = torch.tensor([[-100]*L_seq_state], dtype=torch.long, device=device)
-            override_tensor_state = build_override_tensor(current_state, L_seq_state, composite_model.module2)
+        # For samples that processed a full block (i.e. block_size == text_run) and have remaining tokens,
+        # update the state by running module2 on a state-update sequence.
+        full_block_indices = []
+        for i in range(B):
+            # Only update if a full block was processed and there are more tokens afterward.
+            if block_size == k and (pointer + k < T):
+                full_block_indices.append(i)
+        if full_block_indices:
+            state_input_ids = []
+            state_s_mask = []
+            for i in full_block_indices:
+                block_text = text_tokens[i][pointer:pointer + k]
+                # Create the sequence: [s-token] + full block + [s-token placeholder for prediction]
+                seq = [-1] + block_text + [-1]
+                state_input_ids.append(seq)
+                # s_mask: mark first and last tokens as s tokens.
+                state_s_mask.append([True] + [False] * k + [True])
+            state_input_ids = torch.tensor(state_input_ids, dtype=torch.long, device=device)
+            state_s_mask = torch.tensor(state_s_mask, dtype=torch.bool, device=device)
+            L_state = state_input_ids.shape[1]
+            # Build override tensor for each sample that needs a state update.
+            override_state = []
+            for i in full_block_indices:
+                override_tensor_state = build_override_tensor(current_state[i].unsqueeze(0), L_state, composite_model.module2)
+                override_state.append(override_tensor_state.squeeze(0))
+            override_state = torch.stack(override_state, dim=0)
             with torch.no_grad():
                 out_state = composite_model.module2(
-                    input_ids=input_ids_state,
-                    s_mask=s_mask_state,
-                    override_s=override_tensor_state,
-                    labels=labels_state,
+                    input_ids=state_input_ids,
+                    s_mask=state_s_mask,
+                    override_s=override_state,
+                    labels=torch.full((len(full_block_indices), L_state), -100, dtype=torch.long, device=device),
                     attention_mask=None,
                     mse_loss=False,
                     return_hidden=True
                 )
-            new_state = out_state.hidden_states[0, -1, :].unsqueeze(0)
-            current_state = new_state
-
-        block_start += k
+            new_states = out_state.hidden_states[:, -1, :]  # shape: (num_updates, hidden_dim)
+            # Update the state for each sample that processed a full block.
+            for j, i in enumerate(full_block_indices):
+                current_state[i] = new_states[j]
+        
+        pointer += k  # move to the next block
+    
     return total_loss, token_count
 
-def run_autoregressive_evaluation(composite_model, eval_dataset, text_run, state_run, device):
+
+def run_autoregressive_evaluation(composite_model, eval_loader, text_run, state_run, device):
     """
-    Runs the parallel autoregressive evaluation over an entire evaluation dataset.
-    Returns the average CE loss per text token and the corresponding perplexity.
+    Runs the parallel autoregressive evaluation over the entire evaluation dataset
+    (using batches) and computes the average CE loss per token and the perplexity.
     """
     composite_model.eval()
     total_loss = 0.0
     total_tokens = 0
-    for sample in eval_dataset:
-        loss, token_count = autoregressive_evaluation_sample(composite_model, sample, text_run, state_run, device)
+    for batch in eval_loader:
+        loss, tokens = autoregressive_evaluation_batch(composite_model, batch, text_run, state_run, device)
         total_loss += loss
-        total_tokens += token_count
+        total_tokens += tokens
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
     ppl = math.exp(avg_loss)
-    print(f"\nAutoregressive Evaluation (Parallel) -> Avg CE Loss per token: {avg_loss:.4f}, Perplexity: {ppl:.4f}")
+    print(f"\nAutoregressive Evaluation (Parallel Batch) -> Avg CE Loss per token: {avg_loss:.4f}, Perplexity: {ppl:.4f}")
     return avg_loss, ppl
 
 
