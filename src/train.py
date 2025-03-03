@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from nanogpt import GPTConfig, GPT  # assumes a model.py defining your GPT and GPTConfig classes
-from compressed_gpt import CompressedGPT 
+from compressed_gpt import CompressedGPT, StateConfig
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from utils import set_seed
@@ -67,6 +67,14 @@ def parse_args():
     parser.add_argument("--compile", action="store_true", help="compile the model with torch.compile")
     parser.add_argument("--dtype", type=str, choices=["float32", "bfloat16", "float16"], default="float16", help="data type")
     parser.add_argument("--nowandb", action="store_true", help="Debug mode (disable wandb)")
+
+    # Add any additional arguments here
+    parser.add_argument("--state_model", type=str, default="", help="model for process state embedding")
+    parser.add_argument("--state_layers", type=int, default=1, help="number of state model layers")
+    parser.add_argument("--state_embd", type=int, default=256, help="state model embedding dimension")
+    parser.add_argument("--state_head", type=int, default=2, help="state model number of attention heads")
+    parser.add_argument("--state_length", type=int, default=1, help="length of recurrence")
+    
     return parser.parse_args()
 
 
@@ -208,6 +216,15 @@ def main():
         dropout=args.dropout,
         offset = args.offset
     )
+
+    state_args = dict(
+        name=args.state_model,
+        n_layers=args.state_layers,
+        n_embd=args.state_embd,
+        n_head=args.state_head,
+        length=args.state_length
+    )
+    stateconf = StateConfig(**state_args)
     model_map = {"gpt2": GPT, "compressed": CompressedGPT}
 
     iter_num = 0
@@ -216,7 +233,7 @@ def main():
     if args.init_from == "scratch":
         print("Initializing a new model from scratch")
         gptconf = GPTConfig(**model_args)
-        model = model_map[args.model](gptconf)
+        model = model_map[args.model](gptconf, stateconf)
         # model = GPT(gptconf)
     
     elif args.init_from == "resume":
@@ -225,7 +242,7 @@ def main():
         checkpoint = torch.load(ckpt_path, map_location=device)
         model_args.update({k: checkpoint["model_args"][k] for k in model_args})
         gptconf = GPTConfig(**model_args)
-        model = model_map[args.model](gptconf)
+        model = model_map[args.model](gptconf, stateconf)
         # model = GPT(gptconf)
         model.load_state_dict(checkpoint["model"])
         iter_num = checkpoint.get("iter_num", 0)

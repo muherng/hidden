@@ -18,3 +18,24 @@ hidden_states/**
 # IGNORE EVERYTHING inside folder
 vector_gpt_trainer/**
 !vector_gpt_trainer/.gitkeep
+
+src/out
+
+__pycache__/
+
+# Python cache files
+*.pyc
+*.pyo
+
+# Environment folders
+venv/
+.env/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# wandb files
+wandb/
+
+data/
