@@ -118,7 +118,7 @@ class GPTConfig:
 
 class GPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, state_config=None):
         super().__init__()
         print('=> Initializing GPT2 model...')
         assert config.vocab_size is not None
