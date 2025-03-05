@@ -27,6 +27,10 @@ from transformers.modeling_outputs import CausalLMOutput
 import datasets
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
+
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 # -----------------------------------------------------------------------------
 # 1. Custom Dataset: Interleaved s tokens
 # -----------------------------------------------------------------------------
@@ -247,7 +251,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 mse_target = embed_copy[:, B : L_block, :]
                 mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.1
+                regular = 0.0
                 output.ce_loss = ce_loss
                 output.mse_loss = mse_loss_val
                 #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -554,7 +558,6 @@ class CustomTrainer(Trainer):
         return (loss, logits, inputs.get("labels"), extra)
     
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        print('EVAL DATASET: ', eval_dataset)
         #eval_dataloader = self.get_eval_dataloader(eval_dataset)
         eval_dataloader = self.get_eval_dataloader(None)
         losses, ce_losses, mse_losses = [], [], []
@@ -574,6 +577,25 @@ class CustomTrainer(Trainer):
             "eval_ppl": np.exp(mean_ce) if mean_ce > 0 else float('inf')
         }
         print(f"Evaluation metrics: {metrics}")
+        # Log evaluation metrics so they are written to TensorBoard.
+        self.log(metrics)
+        # Initialize internal lists if they don't exist.
+        if not hasattr(self, 'eval_steps'):
+            self.eval_steps = []
+            self.eval_ppls = []
+        # Append current global step and evaluation perplexity.
+        current_step = self.state.global_step if hasattr(self.state, 'global_step') else 0
+        self.eval_steps.append(current_step)
+        self.eval_ppls.append(metrics["eval_ppl"])
+        
+        plt.figure()
+        plt.plot(self.eval_steps, self.eval_ppls, marker='o')
+        plt.xlabel("Global Step")
+        plt.ylabel("Evaluation Perplexity")
+        plt.title("Evaluation Perplexity Over Time: Two Stage")
+        plt.ylim(0, 400)
+        plt.savefig(f"plots/eval_ppl_{timestamp}.png")
+        plt.close()
         return metrics
 
 
@@ -611,7 +633,6 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join("./two_stage_model", f"seq{args.seq_len}_k{args.text_run}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -678,7 +699,8 @@ def main():
         seed=args.seed,
         lr_scheduler_type="cosine",
         report_to="tensorboard",
-        max_grad_norm=1.0
+        max_grad_norm=1.0,
+        logging_dir="./logs"
     )
 
     trainer = CustomTrainer(
