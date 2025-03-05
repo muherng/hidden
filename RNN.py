@@ -26,6 +26,7 @@ from transformers.modeling_outputs import CausalLMOutput
 
 import datasets
 from types import SimpleNamespace
+from RNN_eval import run_autoregressive_evaluation_debug
 
 # -----------------------------------------------------------------------------
 # 1. Custom Dataset: Interleaved s tokens
@@ -247,7 +248,7 @@ class NoExtraLayerSTokenGPTModel(PreTrainedModel):
                 mse_pred = hidden_states[:, B - 1 : L_block - 1, :]
                 mse_target = embed_copy[:, B : L_block, :]
                 mse_loss_val = F.mse_loss(mse_pred, mse_target)
-                regular = 0.05
+                regular = 0.9
                 output.ce_loss = ce_loss
                 output.mse_loss = mse_loss_val
                 #output.mse_loss = torch.tensor(0.0, device=hidden_states.device)
@@ -577,7 +578,7 @@ class CustomTrainer(Trainer):
         # Use the device from the model parameters.
         device = next(self.model.parameters()).device
         # self.model.text_run and self.model.state_run are assumed to be set.
-        auto_loss, auto_ppl = run_autoregressive_evaluation(
+        auto_loss, auto_ppl = run_autoregressive_evaluation_debug(
             self.model, eval_dataset, self.model.text_run, self.model.state_run, device
         )
         metrics["auto_eval_loss"] = auto_loss
@@ -829,7 +830,7 @@ def main():
                                            text_run=args.text_run, state_run=args.state_run)
 
     from torch.utils.data import Subset
-    #valid_dataset = Subset(valid_dataset, list(range(1)))
+    valid_dataset = Subset(valid_dataset, list(range(10)))
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate_fn, num_workers=8)
@@ -876,7 +877,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=100,
+        eval_steps=400,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
