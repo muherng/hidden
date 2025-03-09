@@ -130,7 +130,7 @@ class TextWithSTokenDataset(Dataset):
 # This is essentially a GPT-2 style model that has a standard token embedding for text tokens
 # and a separate s token parameter (which may or may not be learnable).
 #
-class NoExtraLayerSTokenGPTConfig(GPT2Config):
+class STokenGPTConfig(GPT2Config):
     def __init__(self, vocab_size=1, n_positions=1024, n_embd=256, n_layer=4, n_head=4,
                  dropout=0.1, s_token_learnable=False, state_run=None, text_run=None, **kwargs):
         super().__init__(vocab_size=vocab_size,
@@ -146,8 +146,8 @@ class NoExtraLayerSTokenGPTConfig(GPT2Config):
         self.state_run = state_run
         self.text_run = text_run 
 
-class NoExtraLayerSTokenGPTModel(PreTrainedModel):
-    config_class = NoExtraLayerSTokenGPTConfig
+class STokenGPTModel(PreTrainedModel):
+    config_class = STokenGPTConfig
 
     def __init__(self, config):
         super().__init__(config)
@@ -277,35 +277,6 @@ def compute_block_mask(L, state_run, device):
     mask = torch.where(allowed, 0.0, -1e9)
     return mask
 
-# -----------------------------------------------------------------------------
-# 4. Helper: Create Blocks for Module2
-# -----------------------------------------------------------------------------
-def create_blocks_vectorized(hidden, input_ids, s_mask, labels, text_run, state_run):
-    """
-    Vectorized version of block creation.
-    
-    Args:
-        hidden: Tensor of shape (B, L, hidden_dim) from module1.
-        input_ids: Tensor of shape (B, L) with original token ids.
-        s_mask: Tensor of shape (B, L) indicating s token positions.
-        labels: Tensor of shape (B, L) with labels.
-        text_run: int, number of text tokens per block (in between s token groups).
-        state_run: int, number of s tokens at the beginning and end of each block.
-    
-    Returns:
-        A tuple of tensors:
-          blocks_input_ids: (B, n_blocks, L_block)
-          blocks_s_mask: (B, n_blocks, L_block)
-          blocks_labels: (B, n_blocks, L_block)
-          blocks_hidden: (B, n_blocks, L_block, hidden_dim)
-    """
-    L_block = text_run + 2 * state_run  # Each block has state_run tokens at start and end.
-    step = text_run + state_run         # Blocks slide with overlap of state_run tokens.
-    blocks_hidden = hidden.unfold(dimension=1, size=L_block, step=step)
-    blocks_input_ids = input_ids.unfold(dimension=1, size=L_block, step=step)
-    blocks_s_mask = s_mask.unfold(dimension=1, size=L_block, step=step)
-    blocks_labels = labels.unfold(dimension=1, size=L_block, step=step)
-    return blocks_input_ids, blocks_s_mask, blocks_labels, blocks_hidden
 
 def extract_blocks_vectorized(hidden, input_ids, s_mask, labels, text_run, state_run, device):
     """
@@ -390,7 +361,7 @@ def extract_blocks_vectorized(hidden, input_ids, s_mask, labels, text_run, state
 
 
 class TwoStageModel(nn.Module):
-    def __init__(self, module1: NoExtraLayerSTokenGPTModel, module2: NoExtraLayerSTokenGPTModel,
+    def __init__(self, module1: STokenGPTModel, module2: STokenGPTModel,
                  window=None, text_run=None, state_run=None):
         """
         module1 processes input p and outputs p' (with continuous s tokens).
@@ -425,6 +396,8 @@ class TwoStageModel(nn.Module):
                 state_run=self.state_run, 
                 device=input_ids.device
             )
+
+
 
             # Pass all blocks through module2.
             out2 = self.module2(
@@ -653,7 +626,7 @@ def main():
 
     n_pos = args.state_run + (args.text_run + args.state_run)*args.seq_len 
     # Instantiate module1.
-    config1 = NoExtraLayerSTokenGPTConfig(
+    config1 = STokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions= n_pos,
         n_embd=args.hidden,       
@@ -664,9 +637,9 @@ def main():
         state_run = args.state_run,
         text_run = args.text_run
     )
-    module1 = NoExtraLayerSTokenGPTModel(config1)
+    module1 = STokenGPTModel(config1)
     # Instantiate module2.
-    config2 = NoExtraLayerSTokenGPTConfig(
+    config2 = STokenGPTConfig(
         vocab_size=tokenizer.vocab_size,
         n_positions=n_pos,
         n_embd=args.hidden,       
@@ -677,7 +650,7 @@ def main():
         state_run = args.state_run,
         text_run = args.text_run
     )
-    module2 = NoExtraLayerSTokenGPTModel(config2)
+    module2 = STokenGPTModel(config2)
     # Build composite two-stage model.
     composite_model = TwoStageModel(module1, module2, window=args.window,
                                     text_run=args.text_run, state_run=args.state_run)
