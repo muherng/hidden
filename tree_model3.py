@@ -12,8 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import numpy as np
 
-from foobar import foobar 
-foobar()
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 from transformers import (
     GPT2LMHeadModel,
@@ -72,10 +71,12 @@ class PrintLossCallback(TrainerCallback):
         self.last_eval_loss = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.global_step % 100 != 0:
+        if state.global_step % 5 != 0:
             return
         if logs is None:
             return
+        # Retrieve epoch from the state, if available
+        epoch = getattr(state, "epoch", None)
         if "loss" in logs:
             current_loss = logs["loss"]
             if isinstance(current_loss, torch.Tensor):
@@ -98,6 +99,8 @@ class PrintLossCallback(TrainerCallback):
             current_eval_loss = self.last_eval_loss
             eval_perplexity = math.exp(current_eval_loss) if current_eval_loss is not None and current_eval_loss < 100 else float('inf')
         out_str = f"Step {state.global_step}: "
+        if epoch is not None: 
+            out_str += f"Epoch {epoch} | "
         if current_loss is not None:
             out_str += f"Training Loss: {current_loss:.4f} (Best: {self.best_training_loss:.4f}, Perp: {training_perplexity:.4f})"
         if current_eval_loss is not None:
@@ -106,6 +109,7 @@ class PrintLossCallback(TrainerCallback):
 
 class CustomTrainer(Trainer):
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        print('evaluate')
         metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
         if not hasattr(self, 'eval_steps'):
             self.eval_steps = []
@@ -122,7 +126,6 @@ class CustomTrainer(Trainer):
         plt.title("Evaluation Perplexity Over Time")
         plt.ylim(0, min(400, max(self.eval_ppls)*1.1))
         os.makedirs("plots", exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plt.savefig(f"plots/eval_ppl_{timestamp}.png")
         plt.close()
         return metrics
@@ -209,6 +212,7 @@ class TransformerScanModel(nn.Module):
         input_ids: (batch, seq_length), where seq_length is a multiple of chunk_size.
         Assumes exactly 8 chunks for this binary tree implementation.
         """
+        print('forward')
         batch_size, seq_length = input_ids.shape
         num_chunks = seq_length // self.chunk_size
         assert num_chunks == 8, "This binary tree implementation currently supports 8 chunks."
@@ -307,20 +311,18 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
     )
-    parser.add_argument('--seq_len', type=int, default=512,
+    parser.add_argument('--seq_len', type=int, default=64*8,
                         help='Number of tokens per sample (must be a multiple of chunk_size).')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs.')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-    parser.add_argument('--chunk_size', type=int, default=8, help='Chunk size.')
+    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size.')
     args = parser.parse_args()
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = f"./tree_model/tree_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -334,12 +336,12 @@ def main():
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
         n_embd=256,
-        n_layer=4,
-        n_head=4,
+        n_layer=6,
+        n_head=8,
         dropout=0.1
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=1, T2_num_layers=2)
+                                 T1_num_layers=6, T2_num_layers=6)
     model.to(device)
 
     training_args = TrainingArguments(
