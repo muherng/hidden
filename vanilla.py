@@ -107,10 +107,10 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a standard GPT2 LM on WikiText-2 without noise tokens.'
     )
-    parser.add_argument('--seq_len', type=int, default=128,
+    parser.add_argument('--seq_len', type=int, default=512,
                         help='Number of tokens per sample.')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs.')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
+    parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     args = parser.parse_args()
@@ -132,12 +132,6 @@ def main():
     train_dataset = WikiTextDataset(split="train", tokenizer=tokenizer, seq_len=args.seq_len)
     valid_dataset = WikiTextDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len)
 
-    # Create DataLoaders.
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              collate_fn=collate_fn, num_workers=2)
-    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False,
-                              collate_fn=collate_fn, num_workers=2)
-
     # Load a standard GPT2 LM head model.
     config = GPT2Config(
         vocab_size=tokenizer.vocab_size,  # match your tokenizer
@@ -145,7 +139,7 @@ def main():
         n_embd=256,
         n_layer=4,
         n_head=4,
-        dropout=0.3
+        dropout=0.1
         # You can adjust additional hyperparameters here if needed.
     )
     model = GPT2LMHeadModel(config)
@@ -162,7 +156,7 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        learning_rate=5e-5,           # Lower learning rate.
+        learning_rate=1e-4,           # Lower learning rate.
         warmup_steps=1000,            # Increase warmup steps.
         weight_decay=0.1,             # Increase weight decay.
         fp16=False,
