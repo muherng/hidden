@@ -382,6 +382,117 @@ class TransformerScanModel(nn.Module):
         total_loss = total_loss / num_chunks
         total_loss = total_loss
         return CausalLMOutput(loss=total_loss, logits=all_logits[-1])
+    
+    def sequential_inference(self, input_ids):
+        """
+        Performs sequential inference, processing the input chunk-by-chunk in a way that exactly 
+        replicates the training-time forward-backward (parallel scan) computation.
+        
+        This method uses an online (binary-counter) algorithm to update a small list L of 
+        intermediate prefix states. L has at most O(log N) elements and, at each new chunk,
+        only O(log N) combine operations (each via T1) are performed.
+        
+        For each chunk i:
+          - Compute s_i = T0(chunk_i)
+          - Update L: while the lowest-level slot is already occupied (as indicated by the bits of i),
+            combine that slot with the new value and carry upward.
+          - Then compute the overall prefix by combining the remaining non-None elements of L (in order
+            from high level to low level). This prefix exactly matches the one computed in training.
+          - Use the prefix to form T2’s input (concatenated with the current chunk’s T0 embedding, 
+            excluding its last token) for next-token prediction.
+        
+        Returns:
+            A list of outputs (logits) for each chunk.
+        
+        Time complexity: O(log N) per chunk.
+        Space complexity: O(log N) extra storage.
+        """
+        batch_size, seq_length = input_ids.shape
+        num_chunks = seq_length // self.chunk_size
+        # Split input into chunks: shape (batch, num_chunks, chunk_size)
+        chunks = input_ids.view(batch_size, num_chunks, self.chunk_size)
+        outputs = []
+        # L will hold at most O(log(num_chunks)) states.
+        # We use a list L where L[j] will hold the combined state for a block of size 2^j.
+        L = [None] * (num_chunks.bit_length() + 1)  # Sufficient size for our binary counter.
+
+        # Process chunks sequentially.
+        for i in range(num_chunks):
+            # Compute T0 embedding for chunk i.
+            s = self.T0(chunks[:, i, :])  # (batch, chunk_size, hidden_dim)
+            # Use binary counter logic to merge with previously stored states.
+            # 'carry' the new value upward.
+            x = s
+            j = 0
+            # While the j-th bit of i is set, combine L[j] with x and clear that slot.
+            while (i >> j) & 1:
+                # L[j] is not None.
+                x = self.T1(torch.cat([L[j], x], dim=1))[:, -self.chunk_size:, :]  # Combine operation.
+                L[j] = None
+                j += 1
+            # Store the merged result in L[j].
+            L[j] = x
+
+            # Now, compute the overall prefix for chunks 0...i.
+            # We want the prefix that conditions chunk i.
+            # By definition, for i==0, the prefix is s_0.
+            # For i > 0, the prefix is the combination of the non-None entries in L,
+            # taken in order from the highest index down to 0.
+            prefix = None
+            for k in reversed(range(len(L))):
+                if L[k] is not None:
+                    if prefix is None:
+                        prefix = L[k]
+                    else:
+                        prefix = self.T1(torch.cat([L[k], prefix], dim=1))[:, -self.chunk_size:, :]
+            # For chunk 0, we use its own embedding; for subsequent chunks, T2 input is:
+            # prefix concatenated with T0(chunk_i) excluding its last token.
+            if i == 0:
+                T2_input = s[:, :self.chunk_size - 1, :]
+            else:
+                T2_input = torch.cat([prefix, s[:, :self.chunk_size - 1, :]], dim=1)
+            causal_mask = self.get_causal_mask(T2_input.size(1), T2_input.device)
+            T2_out = self.T2(T2_input, causal_mask=causal_mask)
+            logits = self.T2_head(T2_out)
+            outputs.append(logits)
+            # At this point, any state that was merged is discarded (L slots that got overwritten)
+            # so the maximum number of stored states is O(log(num_chunks)).
+        return outputs
+    
+    @classmethod
+    def from_pretrained(cls, checkpoint_path, config, chunk_size, device="cpu", **kwargs):
+        # Instantiate the model on CPU first.
+        model = cls(config, chunk_size, **kwargs)
+
+        # If checkpoint_path is a directory, locate the weight file.
+        if os.path.isdir(checkpoint_path):
+            # Try "model.safetensors" first.
+            potential_file = os.path.join(checkpoint_path, "model.safetensors")
+            if os.path.exists(potential_file):
+                checkpoint_file = potential_file
+            else:
+                # Fallback to "pytorch_model.bin".
+                potential_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+                if os.path.exists(potential_file):
+                    checkpoint_file = potential_file
+                else:
+                    raise FileNotFoundError("No valid model weights file found in the checkpoint directory.")
+        else:
+            checkpoint_file = checkpoint_path
+
+        # Import and use the safetensors loader without a device parameter.
+        from safetensors.torch import load_file
+        state_dict = load_file(checkpoint_file)  # Loads on CPU by default.
+
+        # If the checkpoint is a dict with "model_state_dict", extract it.
+        if "model_state_dict" in state_dict:
+            model.load_state_dict(state_dict["model_state_dict"])
+        else:
+            model.load_state_dict(state_dict)
+        
+        # Finally, move the model to the desired device.
+        model.to(device)
+        return model
 
 # -----------------------------------------------------------------------------
 # Main Training Code (unchanged)
