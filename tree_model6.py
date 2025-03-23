@@ -32,6 +32,24 @@ from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 
+def pad_to_chunk(x, chunk_size, pad_token_id, device):
+    # x: (batch, seq_length). Pad x along dim=1 so that seq_length becomes a multiple of chunk_size.
+    L = x.size(1)
+    remainder = L % chunk_size
+    if remainder != 0:
+        pad_len = chunk_size - remainder
+        pad_ids = torch.full((x.size(0), pad_len), pad_token_id, dtype=torch.long, device=device)
+        return torch.cat([x, pad_ids], dim=1)
+    return x
+
+def get_offset(x, chunk_size):
+    # Given the current sequence x (batch, seq_length), determine the offset within the last chunk.
+    L = x.size(1)
+    last_chunk_start = (L // chunk_size) * chunk_size
+    offset = L - last_chunk_start - 1  # in [0, chunk_size-1)
+    return offset
+
+
 # -----------------------------------------------------------------------------
 # Dataset and Data Collation (same as before)
 # -----------------------------------------------------------------------------
@@ -493,6 +511,7 @@ class TransformerScanModel(nn.Module):
         # Finally, move the model to the desired device.
         model.to(device)
         return model
+    
 
 # -----------------------------------------------------------------------------
 # Main Training Code (unchanged)
