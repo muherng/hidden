@@ -22,77 +22,37 @@ def get_offset(x, chunk_size):
     offset = L - last_chunk_start - 1  # in [0, chunk_size-1)
     return offset
 
-def compare_prefix_states(model, input_ids, chunk_size, debug=False):
+def compare_prefix_states(model, input_ids, chunk_size, debug=True):
     """
-    Given a padded input_ids tensor (shape: [batch, seq_length], where seq_length is a multiple of chunk_size),
-    this function computes the prefix states in two ways:
-      (a) Using the vectorized_prefix_scan method.
-      (b) Using a sequential binary-counter method identical to the one used in sequential_inference.
-    
-    It then prints, for each chunk index, summary statistics (L2 norm) and the maximum/mean absolute differences.
-    The final prefix tensor P is expected to have shape (batch, num_chunks+1, chunk_size, hidden_dim),
-    where P[:,0] is the dummy state and for i>=1, P[:,i] is the prefix state that conditions chunk i.
+    Computes prefix states using both vectorized_prefix_scan and sequential prefix computation
+    (via model.compute_sequential_prefix) and prints their differences.
     """
     batch_size, seq_length = input_ids.shape
+    # (a) Compute vectorized prefix.
     num_chunks = seq_length // chunk_size
-    # Split input into chunks.
-    chunks = input_ids.view(batch_size, num_chunks, chunk_size)
-    
-    # Compute T0 outputs for each chunk.
-    level0 = [model.T0(chunks[:, i, :]) for i in range(num_chunks)]
+    level0 = [model.T0(input_ids.view(batch_size, num_chunks, chunk_size)[:, i, :])
+              for i in range(num_chunks)]
     dummy = torch.zeros_like(level0[0])
-    
-    # (a) Compute vectorized prefix using the balanced-tree (Blelloch) scan.
     P_vector = model.vectorized_prefix_scan(level0, dummy, debug=debug)
-    # (b) Compute prefix sequentially using binary counter logic.
-    L_slots = [None] * (num_chunks.bit_length() + 1)
-    sequential_prefixes = []
-    for i in range(num_chunks):
-        s = level0[i]
-        x = s
-        j = 0
-        while (i >> j) & 1:
-            # Combine L_slots[j] and x.
-            x = model.T1(torch.cat([L_slots[j], x], dim=1))[:, -chunk_size:, :]
-            L_slots[j] = None
-            j += 1
-        L_slots[j] = x
-        # Combine non-None entries in L_slots (from highest index downwards) to get the prefix.
-        prefix = None
-        for k in reversed(range(len(L_slots))):
-            if L_slots[k] is not None:
-                if prefix is None:
-                    prefix = L_slots[k]
-                else:
-                    prefix = model.T1(torch.cat([L_slots[k], prefix], dim=1))[:, -chunk_size:, :]
-        # For chunk 0, we use s; for subsequent chunks, we use the computed prefix.
-        if i == 0:
-            sequential_prefixes.append(s)
-        else:
-            sequential_prefixes.append(prefix)
-    P_seq = torch.cat([dummy.unsqueeze(1)] + [p.unsqueeze(1) for p in sequential_prefixes], dim=1)
-    # P_seq: (batch, num_chunks+1, chunk_size, hidden_dim)
     
-    # Compare the two.
+    # (b) Compute sequential prefix using compute_sequential_prefix.
+    P_seq = model.compute_sequential_prefix(input_ids, debug=debug)
+    # Compare
     diff = torch.abs(P_vector - P_seq)
     overall_max = diff.max().item()
     overall_mean = diff.mean().item()
     print(f"Prefix state comparison: overall max diff = {overall_max:.6f}, overall mean diff = {overall_mean:.6f}")
-    
     for i in range(P_vector.size(1)):
-        vec_state = P_vector[:, i, :, :]
-        seq_state = P_seq[:, i, :, :]
-        chunk_diff = torch.abs(vec_state - seq_state)
-        norm_vec = torch.norm(vec_state, p=2).item()
-        norm_seq = torch.norm(seq_state, p=2).item()
+        norm_vec = torch.norm(P_vector[:, i, :, :], p=2).item()
+        norm_seq = torch.norm(P_seq[:, i, :, :], p=2).item()
+        chunk_diff = torch.abs(P_vector[:, i, :, :] - P_seq[:, i, :, :])
         max_diff = chunk_diff.max().item()
         mean_diff = chunk_diff.mean().item()
         print(f"Chunk {i}: vectorized L2 norm = {norm_vec:.6f}, sequential L2 norm = {norm_seq:.6f}, max diff = {max_diff:.6f}, mean diff = {mean_diff:.6f}")
-    
     return P_vector, P_seq
 
 
-def debug_compare_step(model, generated, args, tokenizer, tol=1e-3, debug=False):
+def debug_compare_step(model, generated, args, tokenizer, tol=1e-3, debug=True):
     """
     Runs both the vectorized forward() and sequential_inference() prefix computations
     on the same padded input and compares the resulting prefix states.
@@ -126,12 +86,12 @@ def main():
     parser = argparse.ArgumentParser(description="Inference with token-by-token logit and prefix state comparison")
     parser.add_argument("--checkpoint", type=str, required=False, help="Path to model checkpoint")
     parser.add_argument("--prompt", type=str, default="Once upon a time", help="Prompt text")
-    parser.add_argument("--max_new_tokens", type=int, default=50, help="Maximum tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=512-32, help="Maximum tokens to generate")
     parser.add_argument("--chunk_size", type=int, default=32, help="Chunk size used during training")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device")
     parser.add_argument("--tol", type=float, default=1e-3, help="Tolerance for prefix state differences")
-    parser.add_argument("--debug", action="store_true", help="Enable debug printing")
+    parser.add_argument("--debug", default=True, action="store_true", help="Enable debug printing")
     args = parser.parse_args()
     
     # For testing purposes, you can hard-code the checkpoint path.
