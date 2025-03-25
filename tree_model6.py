@@ -319,60 +319,88 @@ class TransformerScanModel(nn.Module):
     def combine(self, x, y):
         """
         Combine two tensors x and y (each of shape (batch, chunk_size, hidden_dim))
-        by concatenating along the token dimension, applying T1, and then taking the last
+        by concatenating along the token dimension, applying T1, and then taking the rightmost
         chunk_size tokens.
         """
         cat = torch.cat([x, y], dim=1)  # shape: (batch, 2*chunk_size, hidden_dim)
-        out = self.T1(cat)
+        print("combine: cat shape:", cat.shape)  # Debug print
+        out = self.T1(cat)  # Removed output_attentions argument.
+        print("combine: out shape after T1:", out.shape)  # Debug print
+        # If T1 returns a tuple, we could extract the tensor, but now it should return a tensor directly.
+        if isinstance(out, tuple):
+            out = out[0]
         return out[:, -self.chunk_size:, :]
 
     def vectorized_prefix_scan(self, states, dummy, debug=False):
         """
         Computes prefix states in parallel using an upsweep/downsweep procedure.
-        Input:
-            states: list of n tensors, each of shape (batch, chunk_size, hidden_dim),
-                    where A[i] = T0(chunk_i)
-            dummy: tensor of shape (batch, chunk_size, hidden_dim) (the identity)
+        Inputs:
+            states: list of n tensors, each of shape (batch, chunk_size, hidden_dim)
+                    where A[i] = T0(chunk_i).
+            dummy: tensor of shape (batch, chunk_size, hidden_dim) (the identity).
         Returns:
-            P: tensor of shape (batch, n+1, chunk_size, hidden_dim) with
-               P[0] = dummy, and for i>=1,
-               P[i] = prefix summary for chunks 0 to i-1, exactly as defined by:
-                   P[1] = A0,
-                   P[2] = T1(A0, A1),
-                   P[3] = T1(T1(A0, A1), A2),
-                   P[4] = T1(T1(A0, A1), T1(A2, A3)), etc.
+            P: tensor of shape (batch, n+1, chunk_size, hidden_dim) with:
+            P[0] = dummy, and for i>=1,
+            P[i] = prefix summary for chunks 0 to i-1.
         """
         n = len(states)
-        # Create a working copy T of length n (for the upsweep).
-        T = list(states)  # T[i] will eventually store block aggregates.
-        # Upsweep: For d = 0, 1, …, floor(log2(n))-1, combine blocks in parallel.
-        levels = int(math.floor(math.log2(n))) if n > 0 else 0
-        for d in range(levels):
+        # Pad states to next power of two.
+        M = 2 ** math.ceil(math.log2(n)) if n > 0 else 1
+        batch = states[0].size(0)
+        device = states[0].device
+        state_tensor = torch.stack(states, dim=1)  # (batch, n, chunk_size, hidden_dim)
+        if M > n:
+            pad_tensor = dummy.unsqueeze(1).expand(batch, M - n, self.chunk_size, -1)
+            T = torch.cat([state_tensor, pad_tensor], dim=1)  # (batch, M, chunk_size, hidden_dim)
+        else:
+            T = state_tensor
+
+        if debug:
+            print(f"Upsweep: n = {n}, padded M = {M}")
+
+        # Upsweep: Process log2(M) levels.
+        L_levels = int(math.log2(M))
+        for d in range(L_levels):
             step = 2 ** (d + 1)
-            for i in range(0, n, step):
-                if i + step - 1 < n:
-                    left_index = i + (2 ** d) - 1
-                    right_index = i + step - 1
-                    T[right_index] = self.T1(torch.cat([T[left_index], T[right_index]], dim=1))[:, -self.chunk_size:, :]
-                    if debug:
-                        print(f"Upsweep: level {d}, combining T[{left_index}] and T[{right_index}]")
-        # Backward (downsweep): For each prefix index i (from 1 to n),
-        # decompose i into powers of two and fold the contributions.
+            num_groups = M // step
+            # Reshape to (batch, num_groups, step, chunk_size, hidden_dim)
+            T = T.view(batch, num_groups, step, self.chunk_size, -1)
+            left_index = (2 ** d) - 1
+            right_index = step - 1
+            left = T[:, :, left_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
+            right = T[:, :, right_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
+            
+            # Concatenate along token dimension (dim=2) but first flatten the num_groups dimension
+            temp = torch.cat([left, right], dim=2)  # (batch, num_groups, 2*chunk_size, hidden_dim)
+            # Flatten group dimension so T1 gets a 3D tensor: (batch*num_groups, 2*chunk_size, hidden_dim)
+            temp_flat = temp.view(batch * num_groups, 2 * self.chunk_size, -1)
+            print("temp_flat shape before T1:", temp_flat.shape)
+            temp_out = self.T1(temp_flat)
+            print("temp_out shape after T1:", temp_out.shape)
+            temp_out = temp_out.view(batch, num_groups, 2 * self.chunk_size, -1)
+            combined = temp_out[:, :, -self.chunk_size:, :]
+            
+            # Update the right element in each group with the combined result.
+            T[:, :, right_index, :, :] = combined
+            # Reshape T back to (batch, M, chunk_size, hidden_dim)
+            T = T.view(batch, M, self.chunk_size, -1)
+            if debug:
+                print(f"Upsweep: level {d} complete; T shape: {T.shape}")
+
+        # Downsweep: For each prefix index i (from 1 to n), decompose i into powers of two.
         P_list = [dummy]  # P[0] = dummy
         for i in range(1, n+1):
-            S = []  # list of contributions
+            S = []  # contributions for this prefix
             pos = 0
             remaining = i
             while remaining > 0:
-                # L is the largest power of 2 <= remaining.
                 L_val = 2 ** int(math.floor(math.log2(remaining)))
                 if L_val == 1:
                     S.append(states[pos])
                 else:
-                    S.append(T[pos + L_val - 1])
+                    S.append(T[:, pos + L_val - 1, :, :])
                 pos += L_val
                 remaining -= L_val
-            # Combine S in left-to-right order.
             prefix = parallel_fold(S, self.combine)
             P_list.append(prefix)
             if debug:
