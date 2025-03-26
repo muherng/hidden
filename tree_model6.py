@@ -338,89 +338,86 @@ class TransformerScanModel(nn.Module):
             out = out[0]
         out = out[:, -self.chunk_size:, :]
         return (out, False)
-
+    
     def vectorized_prefix_scan(self, states, dummy, debug=False):
-        """
-        Computes prefix states in parallel using an upsweep/downsweep procedure.
-        Inputs:
-            states: list of n tensors, each of shape (batch, chunk_size, hidden_dim)
-                    where A[i] = T0(chunk_i) (implicitly real, flag False).
-            dummy: tuple (dummy_tensor, True) of shape (batch, chunk_size, hidden_dim) with dummy flag.
-        Returns:
-            P: tensor of shape (batch, n+1, chunk_size, hidden_dim) with:
-            P[0] = dummy, and for i>=1,
-            P[i] = prefix summary for chunks 0 to i-1.
-        """
         n = len(states)
-        # Pad states to next power of two.
         M = 2 ** math.ceil(math.log2(n)) if n > 0 else 1
         batch = states[0].size(0)
         device = states[0].device
-        # Stack only the values; these are all real states.
-        state_tensor = torch.stack(states, dim=1)  # (batch, n, chunk_size, hidden_dim)
+
+        # Stack real states and build upsweep mask for padded positions
+        state_tensor = torch.stack(states, dim=1)
+        upsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device)
         if M > n:
             pad_tensor = dummy[0].unsqueeze(1).expand(batch, M - n, self.chunk_size, -1)
-            T = torch.cat([state_tensor, pad_tensor], dim=1)  # (batch, M, chunk_size, hidden_dim)
-        else:
-            T = state_tensor
+            state_tensor = torch.cat([state_tensor, pad_tensor], dim=1)
+            upsweep_mask[:, n:] = True
+        T = state_tensor
 
-        if debug:
-            print(f"Upsweep: n = {n}, padded M = {M}")
-
-        # Upsweep: Process log2(M) levels.
+        # Upsweep (unchanged)
         L_levels = int(math.log2(M))
         for d in range(L_levels):
             step = 2 ** (d + 1)
             num_groups = M // step
-            # Reshape to (batch, num_groups, step, chunk_size, hidden_dim)
             T = T.view(batch, num_groups, step, self.chunk_size, -1)
-            left_index = (2 ** d) - 1
-            right_index = step - 1
-            left = T[:, :, left_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
-            right = T[:, :, right_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
-            
-            temp = torch.cat([left, right], dim=2)  # (batch, num_groups, 2*chunk_size, hidden_dim)
-            temp_flat = temp.view(batch * num_groups, 2 * self.chunk_size, -1)
-            if debug:
-                print("temp_flat shape before T1:", temp_flat.shape)
-            temp_out = self.T1(temp_flat)
-            if debug:
-                print("temp_out shape after T1:", temp_out.shape)
-            temp_out = temp_out.view(batch, num_groups, 2 * self.chunk_size, -1)
-            combined = temp_out[:, :, -self.chunk_size:, :]
-            
-            # Update the right element in each group with the combined result.
-            T[:, :, right_index, :, :] = combined
-            # Reshape T back to (batch, M, chunk_size, hidden_dim)
+            left_idx = (2 ** d) - 1
+            right_idx = step - 1
+            left = T[:, :, left_idx]
+            right = T[:, :, right_idx]
+            temp = torch.cat([left, right], dim=2).view(batch * num_groups, 2 * self.chunk_size, -1)
+            out = self.T1(temp)
+            if isinstance(out, tuple): out = out[0]
+            out = out.view(batch, num_groups, 2 * self.chunk_size, -1)[:, :, -self.chunk_size:]
+            T[:, :, right_idx] = out
             T = T.view(batch, M, self.chunk_size, -1)
-            if debug:
-                print(f"Upsweep: level {d} complete; T shape: {T.shape}")
 
-        # Downsweep: For each prefix index i (from 1 to n), decompose i into powers of two.
-        # Here, when fetching contributions, we wrap them with explicit dummy flags.
-        P_list = [dummy[0]]  # P[0] = dummy value
-        for i in range(1, n+1):
-            S = []  # contributions for this prefix, each as a tuple (value, flag)
-            pos = 0
-            remaining = i
-            while remaining > 0:
-                L_val = 2 ** int(math.floor(math.log2(remaining)))
-                index = pos + L_val - 1
-                if L_val == 1:
-                    # From original states: these are real.
-                    S.append((states[pos], False))
-                else:
-                    # From upsweep result T. Check if index is from padded region.
-                    flag = False if index < n else True
-                    S.append((T[:, index, :, :], flag))
-                pos += L_val
-                remaining -= L_val
-            prefix_state = parallel_fold(S, self.combine)
-            P_list.append(prefix_state[0])
-            if debug:
-                print(f"Downsweep: computed prefix for i={i} with {len(S)} contributions, flag: {prefix_state[1]}")
-        P = torch.stack(P_list, dim=1)
-        return P
+        # Downsweep: allocate new tree D and dummy-mask
+        D = torch.zeros_like(T)
+        downsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device)
+        # Initialize root to dummy
+        D[:, M - 1] = dummy[0]
+        downsweep_mask[:, M - 1] = True
+
+        # Parallel downsweep levels
+        for d in reversed(range(L_levels)):
+            step = 2 ** (d + 1)
+            num_groups = M // step
+            T_view = T.view(batch, num_groups, step, self.chunk_size, -1)
+            D_view = D.view(batch, num_groups, step, self.chunk_size, -1)
+            upsweep_mask_view = upsweep_mask.view(batch, num_groups, step)
+            downsweep_mask_view = downsweep_mask.view(batch, num_groups, step)
+
+            left_idx = (2 ** d) - 1
+            right_idx = step - 1
+
+            parent_val = D_view[:, :, right_idx]
+            parent_dummy = downsweep_mask_view[:, :, right_idx]
+            left_old_val = T_view[:, :, left_idx]
+            left_dummy = upsweep_mask_view[:, :, left_idx]
+
+            # Propagate parent down to left child
+            D_view[:, :, left_idx] = parent_val
+            downsweep_mask_view[:, :, left_idx] = parent_dummy
+
+            # Compute combined only for real-real pairs
+            concat = torch.cat([parent_val, left_old_val], dim=2).view(batch * num_groups, 2 * self.chunk_size, -1)
+            combined = self.T1(concat)
+            if isinstance(combined, tuple): combined = combined[0]
+            combined = combined.view(batch, num_groups, 2 * self.chunk_size, -1)[:, :, -self.chunk_size:]
+
+            # Merge according to dummy flags
+            # If parent is dummy -> result = left_old_val
+            # If left is dummy -> result = parent_val
+            # Else -> result = combined
+            result = torch.where(parent_dummy.unsqueeze(-1).unsqueeze(-1), left_old_val, combined)
+            result = torch.where(left_dummy.unsqueeze(-1).unsqueeze(-1), parent_val, result)
+            D_view[:, :, right_idx] = result
+            downsweep_mask_view[:, :, right_idx] = parent_dummy & left_dummy
+
+        # Return leaves: exclusive prefixes (including dummy at index 0)
+        return D[:, :n]
+
+
 
 
     def compute_sequential_prefix(self, input_ids, debug=False):
