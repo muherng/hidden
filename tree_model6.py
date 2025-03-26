@@ -14,6 +14,8 @@ import numpy as np
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+TOL = 1e-6  # Tolerance to determine if a tensor is the dummy
+
 from transformers import (
     GPT2LMHeadModel,
     PreTrainedModel,
@@ -316,28 +318,34 @@ class TransformerScanModel(nn.Module):
         total_loss = total_loss
         return CausalLMOutput(loss=total_loss, logits=all_logits[-1])
     
+    
     def combine(self, x, y):
         """
-        Combine two tensors x and y (each of shape (batch, chunk_size, hidden_dim))
-        by concatenating along the token dimension, applying T1, and then taking the rightmost
-        chunk_size tokens.
+        Combine two states x and y, where each is a tuple (value, is_dummy).
+        If one operand is dummy, return the other. Otherwise, combine the values.
         """
-        cat = torch.cat([x, y], dim=1)  # shape: (batch, 2*chunk_size, hidden_dim)
-        print("combine: cat shape:", cat.shape)  # Debug print
-        out = self.T1(cat)  # Removed output_attentions argument.
-        print("combine: out shape after T1:", out.shape)  # Debug print
-        # If T1 returns a tuple, we could extract the tensor, but now it should return a tensor directly.
+        # If left is dummy, return right.
+        if x[1]:
+            return y
+        # If right is dummy, return left.
+        if y[1]:
+            return x
+
+        # Both are real: combine via T1.
+        cat = torch.cat([x[0], y[0]], dim=1)  # shape: (batch, 2*chunk_size, hidden_dim)
+        out = self.T1(cat)
         if isinstance(out, tuple):
             out = out[0]
-        return out[:, -self.chunk_size:, :]
+        out = out[:, -self.chunk_size:, :]
+        return (out, False)
 
     def vectorized_prefix_scan(self, states, dummy, debug=False):
         """
         Computes prefix states in parallel using an upsweep/downsweep procedure.
         Inputs:
             states: list of n tensors, each of shape (batch, chunk_size, hidden_dim)
-                    where A[i] = T0(chunk_i).
-            dummy: tensor of shape (batch, chunk_size, hidden_dim) (the identity).
+                    where A[i] = T0(chunk_i) (implicitly real, flag False).
+            dummy: tuple (dummy_tensor, True) of shape (batch, chunk_size, hidden_dim) with dummy flag.
         Returns:
             P: tensor of shape (batch, n+1, chunk_size, hidden_dim) with:
             P[0] = dummy, and for i>=1,
@@ -348,9 +356,10 @@ class TransformerScanModel(nn.Module):
         M = 2 ** math.ceil(math.log2(n)) if n > 0 else 1
         batch = states[0].size(0)
         device = states[0].device
+        # Stack only the values; these are all real states.
         state_tensor = torch.stack(states, dim=1)  # (batch, n, chunk_size, hidden_dim)
         if M > n:
-            pad_tensor = dummy.unsqueeze(1).expand(batch, M - n, self.chunk_size, -1)
+            pad_tensor = dummy[0].unsqueeze(1).expand(batch, M - n, self.chunk_size, -1)
             T = torch.cat([state_tensor, pad_tensor], dim=1)  # (batch, M, chunk_size, hidden_dim)
         else:
             T = state_tensor
@@ -370,13 +379,13 @@ class TransformerScanModel(nn.Module):
             left = T[:, :, left_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
             right = T[:, :, right_index, :, :]   # (batch, num_groups, chunk_size, hidden_dim)
             
-            # Concatenate along token dimension (dim=2) but first flatten the num_groups dimension
             temp = torch.cat([left, right], dim=2)  # (batch, num_groups, 2*chunk_size, hidden_dim)
-            # Flatten group dimension so T1 gets a 3D tensor: (batch*num_groups, 2*chunk_size, hidden_dim)
             temp_flat = temp.view(batch * num_groups, 2 * self.chunk_size, -1)
-            print("temp_flat shape before T1:", temp_flat.shape)
+            if debug:
+                print("temp_flat shape before T1:", temp_flat.shape)
             temp_out = self.T1(temp_flat)
-            print("temp_out shape after T1:", temp_out.shape)
+            if debug:
+                print("temp_out shape after T1:", temp_out.shape)
             temp_out = temp_out.view(batch, num_groups, 2 * self.chunk_size, -1)
             combined = temp_out[:, :, -self.chunk_size:, :]
             
@@ -388,25 +397,31 @@ class TransformerScanModel(nn.Module):
                 print(f"Upsweep: level {d} complete; T shape: {T.shape}")
 
         # Downsweep: For each prefix index i (from 1 to n), decompose i into powers of two.
-        P_list = [dummy]  # P[0] = dummy
+        # Here, when fetching contributions, we wrap them with explicit dummy flags.
+        P_list = [dummy[0]]  # P[0] = dummy value
         for i in range(1, n+1):
-            S = []  # contributions for this prefix
+            S = []  # contributions for this prefix, each as a tuple (value, flag)
             pos = 0
             remaining = i
             while remaining > 0:
                 L_val = 2 ** int(math.floor(math.log2(remaining)))
+                index = pos + L_val - 1
                 if L_val == 1:
-                    S.append(states[pos])
+                    # From original states: these are real.
+                    S.append((states[pos], False))
                 else:
-                    S.append(T[:, pos + L_val - 1, :, :])
+                    # From upsweep result T. Check if index is from padded region.
+                    flag = False if index < n else True
+                    S.append((T[:, index, :, :], flag))
                 pos += L_val
                 remaining -= L_val
-            prefix = parallel_fold(S, self.combine)
-            P_list.append(prefix)
+            prefix_state = parallel_fold(S, self.combine)
+            P_list.append(prefix_state[0])
             if debug:
-                print(f"Downsweep: computed prefix for i={i} with {len(S)} contributions.")
+                print(f"Downsweep: computed prefix for i={i} with {len(S)} contributions, flag: {prefix_state[1]}")
         P = torch.stack(P_list, dim=1)
         return P
+
 
     def compute_sequential_prefix(self, input_ids, debug=False):
         """
@@ -415,26 +430,30 @@ class TransformerScanModel(nn.Module):
             (batch, n+1, chunk_size, hidden_dim)
         corresponding to:
             [ dummy, A0, T1(A0, A1), T1(T1(A0, A1), A2), T1(T1(A0, A1), T1(A2, A3)), ... ]
+        Dummy states have an explicit boolean flag True.
         """
         batch_size, seq_length = input_ids.shape
         n = seq_length // self.chunk_size
+        # Reshape into chunks.
         chunks = input_ids.view(batch_size, n, self.chunk_size)
-        level0 = [self.T0(chunks[:, i, :]) for i in range(n)]
-        dummy = torch.zeros_like(level0[0])
+        # Apply initial embedding T0; wrap each state as (value, False)
+        level0 = [(self.T0(chunks[:, i, :]), False) for i in range(n)]
+        # Create dummy as (tensor, True)
+        dummy = (torch.zeros_like(level0[0][0]), True)
         prefix_list = []
         # L will be our binary counter; its length is O(log n)
         L = [None] * (n.bit_length() + 1)
         for i in range(n):
-            s = level0[i]  # A[i]
-            # Update L with A[i] using carry logic.
+            s = level0[i]  # (A[i], False)
             current = s
             j = 0
+            # Carry update: while the j-th bit is 1, combine.
             while ((i >> j) & 1) == 1:
-                current = self.T1(torch.cat([L[j], current], dim=1))[:, -self.chunk_size:, :]
+                current = self.combine(L[j], current)
                 L[j] = None
                 j += 1
             L[j] = current
-            # Now, compute prefix by folding the non-None entries of L in descending order.
+            # Now, fold the non-None entries of L in descending order (MSB-to-LSB).
             if i == 0:
                 prefix = s
             else:
@@ -444,10 +463,15 @@ class TransformerScanModel(nn.Module):
                         if prefix is None:
                             prefix = L[k]
                         else:
-                            prefix = self.T1(torch.cat([prefix, L[k]], dim=1))[:, -self.chunk_size:, :]
+                            prefix = self.combine(prefix, L[k])
             prefix_list.append(prefix)
-        P_seq = torch.cat([dummy.unsqueeze(1)] + [p.unsqueeze(1) for p in prefix_list], dim=1)
+            if debug:
+                print(f"Sequential: computed prefix for chunk {i}, flag: {prefix[1]}")
+        # Concatenate dummy and all prefix values (ignoring flags for output)
+        P_seq = torch.cat([dummy[0].unsqueeze(1)] + [p[0].unsqueeze(1) for p in prefix_list], dim=1)
         return P_seq
+
+
     @classmethod
     def from_pretrained(cls, checkpoint_path, config, chunk_size, device="cpu", **kwargs):
         # Instantiate the model on CPU first.
