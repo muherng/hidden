@@ -534,7 +534,14 @@ class TransformerScanModel(nn.Module):
 
         return next_logits, L
 
-    def forward_inference_fix(self, input_ids, L=None, chunks_processed=0):
+    def forward_inference_fix(
+        self,
+        input_ids: torch.Tensor,
+        L: Optional[list] = None,
+        chunks_processed: int = 0,
+        prefix_val: Optional[torch.Tensor] = None,
+        past_key_values=None
+    ):
         batch_size, total_len = input_ids.shape
         chunk = self.chunk_size
         num_full = total_len // chunk
@@ -545,16 +552,19 @@ class TransformerScanModel(nn.Module):
             if num_full > 0:
                 P_seq, L = self.compute_sequential_prefix(input_ids[:, : num_full * chunk])
                 chunks_processed = num_full
+                prefix_val = P_seq[:, -1, :, :]  # last prefix of the prompt
             else:
                 L = []
                 chunks_processed = 0
+                prefix_val = torch.zeros(batch_size, chunk, self.config.n_embd, device=input_ids.device)
 
-        # INCREMENTAL STEP: only one new chunk may appear per token
+        # INCREMENTAL STEP: update only on chunk boundary
         elif num_full > chunks_processed:
-            assert num_full == chunks_processed + 1, \
-                "Only one new chunk should appear per token"
+            print('update chunk: ', num_full)
+            assert num_full == chunks_processed + 1, "Only one new chunk per token"
             start = chunks_processed * chunk
             state = (self.T0(input_ids[:, start : start + chunk]), False)
+
             j = 0
             while ((chunks_processed >> j) & 1) == 1:
                 state = self.combine(L[j], state)
@@ -565,16 +575,14 @@ class TransformerScanModel(nn.Module):
             L[j] = state
             chunks_processed += 1
 
-        # Compute prefix by folding L MSB→LSB
-        prefix = None
-        for entry in reversed(L):
-            if entry is not None:
-                prefix = entry if prefix is None else self.combine(prefix, entry)
-        prefix_val = prefix[0] if prefix is not None else torch.zeros(
-            batch_size, chunk, self.config.n_embd, device=input_ids.device
-        )
+            # Recompute prefix_val by folding non‑None L in MSB→LSB
+            prefix = None
+            for entry in reversed(L):
+                if entry is not None:
+                    prefix = entry if prefix is None else self.combine(prefix, entry)
+            prefix_val = prefix[0]
 
-        # Build T2 input and compute logits (unchanged)
+        # Build T2 input using cached prefix_val
         if remainder_len == 0:
             t2_input = prefix_val[:, :-1, :]
         else:
@@ -582,10 +590,11 @@ class TransformerScanModel(nn.Module):
             t2_input = torch.cat([prefix_val, rem[:, : remainder_len - 1, :]], dim=1)
 
         causal_mask = self.get_causal_mask(t2_input.size(1), t2_input.device)
-        t2_out = self.T2(t2_input, causal_mask=causal_mask)
+        t2_out = self.T2(t2_input, causal_mask=causal_mask, past_key_values=past_key_values)
         next_logits = self.T2_head(t2_out[:, -1, :])
 
-        return next_logits, L, chunks_processed
+        return next_logits, L, chunks_processed, prefix_val
+
 
     @classmethod
     def from_pretrained(cls, checkpoint_path, config, chunk_size, device="cpu", **kwargs):
