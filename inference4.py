@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--prompt", type=str, default="Once upon a time")
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--max_new_tokens", type=int, default=64000)
-    parser.add_argument("--chunk_size", type=int, default=32)
+    parser.add_argument("--chunk_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
@@ -43,13 +43,30 @@ def main():
         dropout=0.1,
     )
 
-    model = TransformerScanModel.from_pretrained(
-        args.checkpoint, 
-        config=config, 
+    def _init_weights(module):
+        if isinstance(module, torch.nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, torch.nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=config.initializer_range)
+        elif isinstance(module, torch.nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    
+    model = TransformerScanModel(
+        config=config,
         chunk_size=args.chunk_size,
-        T1_num_layers=2,  # match training parameters
-        T2_num_layers=2
-    ).to(device).eval()
+        T1_num_layers=2,
+        T2_num_layers=2,
+    )
+
+    # Explicitly initialize all weights
+    
+    # Recursively initialize all submodules
+    model.apply(_init_weights)
+    model = model.to(device).eval()
 
     # Prepare batched prompts
     prompts = [args.prompt] * args.batch_size
@@ -58,7 +75,7 @@ def main():
     # Initialize L as None (will be built on first call)
     L = None
 
-    if False: 
+    if True: 
         start = time.time()
         for i in range(args.max_new_tokens):
             if i%100 == 0: 
