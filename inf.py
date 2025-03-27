@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_new_tokens", type=int, default=1000)
     parser.add_argument("--npositions", type=int, default=32000)
-    parser.add_argument("--chunk_size", type=int, default=32)
+    parser.add_argument("--chunk_size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
@@ -77,6 +77,7 @@ def main():
     if True: 
         L = None
         chunks_processed = 0
+        prefix_val = None
         start = time.time()
         for i in range(args.max_new_tokens):
             if i % 100 == 0:
@@ -84,7 +85,9 @@ def main():
             if i == 1: 
                 start = time.time()
             #next_logits, L = model.forward_inference(input_ids, L=L)
-            next_logits, L, chunks_processed = model.forward_inference_fix(input_ids, L, chunks_processed)
+            next_logits, L, chunks_processed, prefix_val = model.forward_inference_fix(
+                input_ids, L, chunks_processed, prefix_val
+            )
             next_token = next_logits.argmax(dim=-1, keepdim=True)
             input_ids = torch.cat([input_ids, next_token], dim=1)
 
