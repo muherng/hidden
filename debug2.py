@@ -27,7 +27,7 @@ def main():
     
     # Configuration and parameters.
     chunk_size = 32
-    n_chunks = 6  # Use 3 chunks for testing.
+    n_chunks = 9  # Use 3 chunks for testing.
     batch = 1
 
     # For testing purposes, you can hard-code the checkpoint path.
@@ -62,7 +62,7 @@ def main():
 
     # Compute sequential prefix states.
     P_seq = model.compute_sequential_prefix(input_ids, debug=True)
-    P_seq = P_seq[:,:-1,:,:]  # Remove the last state.
+    #P_seq = P_seq[:,:-1,:,:]  # Remove the last state.
     print(f"\nSequential prefix scan (P_seq) shape: {P_seq.shape}")
     for i in range(P_seq.size(1)):
         norm_val = torch.norm(P_seq[:, i]).item()
