@@ -196,11 +196,14 @@ class T2(nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList([GPT2Block(config) for _ in range(num_layers)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
-    def forward(self, x, causal_mask):
-        for block in self.blocks:
-            x = block(x, attention_mask=causal_mask, use_cache=False, output_attentions=False)[0]
+    def forward(self, x, causal_mask, past_key_values=None):
+        new_past = []
+        for i, block in enumerate(self.blocks):
+            past = None if past_key_values is None else past_key_values[i]
+            x, present = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
+            new_past.append(present)
         x = self.ln_f(x)
-        return x
+        return x, tuple(new_past)
     
 def parallel_fold(S, op):
     """
@@ -467,72 +470,6 @@ class TransformerScanModel(nn.Module):
         P_seq = torch.cat([dummy[0].unsqueeze(1)] + [p[0].unsqueeze(1) for p in prefix_list], dim=1)
         P_seq = P_seq[:,:-1,:,:]
         return P_seq, L
-    
-    def forward_inference(self, input_ids: torch.Tensor, L: Optional[list]=None):
-        """
-        Args:
-            input_ids: (batch, seq_length) — may not align to chunk_size
-            L: Optional binary-counter state from previous call
-
-        Returns:
-            next_logits: (batch, vocab_size)
-            updated_L: binary-counter list for incremental prefix
-        """
-        batch_size, total_len = input_ids.shape
-        chunk = self.chunk_size
-
-        # Split into full chunks + remainder
-        num_full = total_len // chunk
-        remainder_len = total_len % chunk
-
-        # Build or update binary-counter L
-        if L is None:
-            # Compute from scratch for all full chunks
-            if num_full > 0:
-                P_seq, L = self.compute_sequential_prefix(input_ids[:, : num_full * chunk])
-            else:
-                # No full chunks: initialize empty L and dummy prefix
-                L = []
-                P_seq = None
-        elif num_full > len(L):
-            #print('L length: ', len(L))
-            #for p in range(len(L)):
-            #    print('L chunk shape: ', L[p])
-            # Fold any newly completed chunks into L
-            new_chunks = input_ids[:, len(L) * chunk : num_full * chunk].view(batch_size, -1, chunk)
-            for i in range(new_chunks.size(1)):
-                print('i:', i)
-                state = (self.T0(new_chunks[:, i, :]), False)
-                j = 0
-                while ((len(L) >> j) & 1) == 1:
-                    state = self.combine(L[j], state)
-                    L[j] = None
-                    j += 1
-                if j >= len(L): L.extend([None] * (j + 1 - len(L)))
-                L[j] = state
-
-        # Compute prefix value by folding non‑None entries MSB→LSB
-        prefix = None
-        for entry in reversed(L):
-            if entry is not None:
-                prefix = entry if prefix is None else self.combine(prefix, entry)
-        prefix_val = prefix[0] if prefix is not None else torch.zeros(batch_size, chunk, self.config.n_embd, device=input_ids.device)
-
-        # Build T2 input: concat prefix + remainder (drop last token for causal)
-        if remainder_len == 0:
-            # No remainder: just pad with a dummy zero so we can still call T2
-            t2_input = prefix_val[:, :-1, :]
-        else:
-            rem = self.T0(input_ids[:, -remainder_len:])
-            t2_input = torch.cat([prefix_val, rem[:, : remainder_len - 1, :]], dim=1)
-
-        causal_mask = self.get_causal_mask(t2_input.size(1), t2_input.device)
-        t2_out = self.T2(t2_input, causal_mask=causal_mask)
-
-        # Next‑token logits = last timestep
-        next_logits = self.T2_head(t2_out[:, -1, :])  # (batch, vocab_size)
-
-        return next_logits, L
 
     def forward_inference_fix(
         self,
@@ -583,17 +520,20 @@ class TransformerScanModel(nn.Module):
             prefix_val = prefix[0]
 
         # Build T2 input using cached prefix_val
-        if remainder_len == 0:
-            t2_input = prefix_val[:, :-1, :]
-        else:
-            rem = self.T0(input_ids[:, -remainder_len:])
-            t2_input = torch.cat([prefix_val, rem[:, : remainder_len - 1, :]], dim=1)
+        # If we just crossed into a new full chunk, send the entire prefix chunk into T2 (cold start)
+        if num_full > chunks_processed - 1:  # i.e. we just incremented chunks_processed above
+            # prefix_val shape = (batch, chunk, hidden_dim)
+            t2_out, past_key_values = self.T2(prefix_val, causal_mask=None, past_key_values=None)
 
-        causal_mask = self.get_causal_mask(t2_input.size(1), t2_input.device)
-        t2_out = self.T2(t2_input, causal_mask=causal_mask, past_key_values=past_key_values)
+        # Otherwise, only feed the newest single token into T2 using the cached KV
+        else:
+            # Take the last timestep of prefix_val as the new input token
+            last_token = prefix_val[:, -1:, :]  # shape = (batch, 1, hidden_dim)
+            t2_out, past_key_values = self.T2(last_token, causal_mask=None, past_key_values=past_key_values)
+
         next_logits = self.T2_head(t2_out[:, -1, :])
 
-        return next_logits, L, chunks_processed, prefix_val
+        return next_logits, L, chunks_processed, prefix_val, past_key_values
 
 
     @classmethod
