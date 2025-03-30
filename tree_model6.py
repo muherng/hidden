@@ -61,8 +61,8 @@ class WikiTextDataset(Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         
-        #self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
         text = " ".join(self.data["text"])
         self.tokenizer.model_max_length = int(1e7)
         self.token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -471,7 +471,7 @@ class TransformerScanModel(nn.Module):
         P_seq = P_seq[:,:-1,:,:]
         return P_seq, L
 
-    def forward_inference_fix(
+    def forward_inference(
         self,
         input_ids: torch.Tensor,
         L: Optional[list] = None,
