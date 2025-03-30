@@ -86,7 +86,7 @@ def main():
             if i == 1: 
                 start = time.time()
             #next_logits, L = model.forward_inference(input_ids, L=L)
-            next_logits, L, chunks_processed, prefix_val, past_key_values = model.forward_inference_fix(
+            next_logits, L, chunks_processed, prefix_val, past_key_values = model.forward_inference(
                 input_ids, L, chunks_processed, prefix_val, past_key_values = past_key_values
             )
             next_token = next_logits.argmax(dim=-1, keepdim=True)
