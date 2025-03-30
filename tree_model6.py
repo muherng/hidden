@@ -272,7 +272,7 @@ class TransformerScanModel(nn.Module):
         # --- Process chunk 0: standard autoregressive prediction ---
         T2_input_0 = level0[0][:, :self.chunk_size - 1, :]  # (batch, chunk_size-1, hidden_dim)
         causal_mask_0 = self.get_causal_mask(T2_input_0.size(1), T2_input_0.device)
-        T2_out_0 = self.T2(T2_input_0, causal_mask=causal_mask_0)  # (batch, chunk_size-1, hidden_dim)
+        T2_out_0,_ = self.T2(T2_input_0, causal_mask=causal_mask_0)  # (batch, chunk_size-1, hidden_dim)
         logits_chunk0 = self.T2_head(T2_out_0)  # (batch, chunk_size-1, vocab_size)
         all_logits.append(logits_chunk0)
         target_chunk0 = chunks[:, 0, 1:]  # (batch, chunk_size-1)
@@ -300,7 +300,7 @@ class TransformerScanModel(nn.Module):
             T2_inputs = T2_inputs.view(-1, T2_inputs.size(2), T2_inputs.size(3))
             seq_len_t2 = T2_inputs.size(1)  # this equals 2*chunk_size-1
             causal_mask = self.get_causal_mask(seq_len_t2, T2_inputs.device)
-            T2_out = self.T2(T2_inputs, causal_mask=causal_mask)  # (batch*(num_chunks-1), 2*chunk_size-1, hidden_dim)
+            T2_out,_ = self.T2(T2_inputs, causal_mask=causal_mask)  # (batch*(num_chunks-1), 2*chunk_size-1, hidden_dim)
             # For each T2 input, we only want to predict the tokens corresponding to the current chunk.
             # That is, we take only the last (chunk_size-1) tokens.
             T2_out = T2_out[:, - (self.chunk_size - 1):, :]  # (batch*(num_chunks-1), chunk_size-1, hidden_dim)
@@ -352,7 +352,7 @@ class TransformerScanModel(nn.Module):
 
         # Stack real states and build upsweep mask for padded positions
         state_tensor = torch.stack(states, dim=1)
-        upsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device)
+        upsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device).detach()
         if M > n:
             pad_tensor = dummy[0].unsqueeze(1).expand(batch, M - n, self.chunk_size, -1)
             state_tensor = torch.cat([state_tensor, pad_tensor], dim=1)
@@ -378,7 +378,7 @@ class TransformerScanModel(nn.Module):
 
         # Downsweep: allocate new tree D and dummy-mask
         D = torch.zeros_like(T)
-        downsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device)
+        downsweep_mask = torch.zeros(batch, M, dtype=torch.bool, device=device).detach()
         # Initialize root to dummy
         D[:, M - 1] = dummy[0]
         downsweep_mask[:, M - 1] = True
@@ -389,8 +389,8 @@ class TransformerScanModel(nn.Module):
             num_groups = M // step
             T_view = T.view(batch, num_groups, step, self.chunk_size, -1)
             D_view = D.view(batch, num_groups, step, self.chunk_size, -1)
-            upsweep_mask_view = upsweep_mask.view(batch, num_groups, step)
-            downsweep_mask_view = downsweep_mask.view(batch, num_groups, step)
+            upsweep_mask_view = upsweep_mask.view(batch, num_groups, step).detach().clone()
+            downsweep_mask_view = downsweep_mask.view(batch, num_groups, step).detach().clone()
 
             left_idx = (2 ** d) - 1
             right_idx = step - 1
@@ -402,6 +402,7 @@ class TransformerScanModel(nn.Module):
 
             # Propagate parent down to left child
             D_view[:, :, left_idx] = parent_val
+            downsweep_mask_view = downsweep_mask_view.clone()
             downsweep_mask_view[:, :, left_idx] = parent_dummy
 
             # Compute combined only for real-real pairs
@@ -414,9 +415,10 @@ class TransformerScanModel(nn.Module):
             # If parent is dummy -> result = left_old_val
             # If left is dummy -> result = parent_val
             # Else -> result = combined
-            result = torch.where(parent_dummy.unsqueeze(-1).unsqueeze(-1), left_old_val, combined)
-            result = torch.where(left_dummy.unsqueeze(-1).unsqueeze(-1), parent_val, result)
+            result = torch.where(parent_dummy.unsqueeze(-1).unsqueeze(-1).detach(), left_old_val, combined)
+            result = torch.where(left_dummy.unsqueeze(-1).unsqueeze(-1).detach(), parent_val, result)
             D_view[:, :, right_idx] = result
+            downsweep_mask_view = downsweep_mask_view.clone()
             downsweep_mask_view[:, :, right_idx] = parent_dummy & left_dummy
 
         # Return leaves: exclusive prefixes (including dummy at index 0)
