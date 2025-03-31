@@ -61,8 +61,8 @@ class WikiTextDataset(Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         
-        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        #self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        #self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
         text = " ".join(self.data["text"])
         self.tokenizer.model_max_length = int(1e7)
         self.token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -581,13 +581,13 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
     )
-    parser.add_argument('--seq_len', type=int, default=32*16,
+    parser.add_argument('--seq_len', type=int, default=64*8,
                         help='Number of tokens per sample (must be a multiple of chunk_size).')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-    parser.add_argument('--chunk_size', type=int, default=32, help='Chunk size.')
+    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size.')
     args = parser.parse_args()
     
     if args.seq_len % args.chunk_size != 0:
@@ -608,13 +608,13 @@ def main():
     config = GPT2Config(
         vocab_size=tokenizer.vocab_size,
         n_positions=1024,
-        n_embd=256,
-        n_layer=4,
-        n_head=4,
+        n_embd=768,
+        n_layer=6,
+        n_head=12,
         dropout=0.1
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=2, T2_num_layers=2)
+                                 T1_num_layers=6, T2_num_layers=6)
     model.to(device)
 
     training_args = TrainingArguments(
