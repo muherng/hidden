@@ -263,8 +263,12 @@ class TransformerScanModel(nn.Module):
         dummy = (torch.zeros_like(level0[0]), True)
         # Compute prefix states using the vectorized scan.
         # P: (batch, num_chunks+1, chunk_size, hidden_dim)
-        P = self.vectorized_prefix_scan(level0, dummy, debug=False)
-        
+        mode == "sequential"
+        if mode == "parallel": 
+            P = self.vectorized_prefix_scan(level0, dummy, debug=False)
+        else: 
+            P, L = self.compute_sequential_prefix(input_ids, debug=False)
+            
         loss_fn = nn.CrossEntropyLoss()
         total_loss = 0.0
         all_logits = []
