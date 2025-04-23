@@ -156,7 +156,7 @@ class CompressedGPT(GPT):
         x_in = torch.cat([emb_first, scratch], dim=1)  # shape: (bs, offset+1, n_embd)
         out_1, logits_1 = self._forward(x_in)
         logits_1 = logits_1[:, :-1, :]  # remove the last token
-        scratch_embd = out_1[:, offset, :]   # Extract the hidden state of the scratch token at position 'offset'
+        scratch_embd = out_1[:, -1, :]   # Extract the hidden state of the scratch token at position 'offset'
 
         
         # Process state embedding
@@ -174,7 +174,8 @@ class CompressedGPT(GPT):
             targets_2 = targets[:, offset:]  # targets for the second pass
             loss_1 = F.cross_entropy(logits_1.reshape(-1, logits_1.size(-1)), targets_1.reshape(-1), ignore_index=-1)
             loss_2 = F.cross_entropy(logits_2.reshape(-1, logits_2.size(-1)), targets_2.reshape(-1), ignore_index=-1)
-            loss = loss_1 + loss_2
+            # loss = loss_1 + loss_2
+            loss = {'loss_1': loss_1, 'loss_2': loss_2, 'loss': loss_1 + loss_2}
         else:
             loss = None
         
