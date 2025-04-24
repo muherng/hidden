@@ -61,8 +61,8 @@ class WikiTextDataset(Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         
-        #self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        # self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
         text = " ".join(self.data["text"])
         self.tokenizer.model_max_length = int(1e7)
         self.token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -131,7 +131,7 @@ class PrintLossCallback(TrainerCallback):
 
 class CustomTrainer(Trainer):
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        print('evaluate')
+        # print('evaluate')
         metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
         if not hasattr(self, 'eval_steps'):
             self.eval_steps = []
@@ -229,7 +229,7 @@ class TransformerScanModel(nn.Module):
             [dummy, s[0:0], s[0:1], s[0:2], s[0:3], s[0:4], s[0:5], s[0:6]]
       - Runs T2 for autoregressive next-token prediction.
     """
-    def __init__(self, config, chunk_size, T1_num_layers=1, T2_num_layers=2):
+    def __init__(self, config, chunk_size, T1_num_layers=1, T2_num_layers=2, train_mode="parallel"):
         super().__init__()
         self.config = config
         self.chunk_size = chunk_size
@@ -238,6 +238,8 @@ class TransformerScanModel(nn.Module):
         self.T1 = T1(config, num_layers=T1_num_layers)
         self.T2 = T2(config, num_layers=T2_num_layers)
         self.T2_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.train_mode = train_mode
+        print('=> Training with mode:', train_mode)
     
     def get_causal_mask(self, seq_length, device):
         mask = torch.tril(torch.ones(seq_length, seq_length, device=device)).unsqueeze(0).unsqueeze(0)
@@ -263,8 +265,7 @@ class TransformerScanModel(nn.Module):
         dummy = (torch.zeros_like(level0[0]), True)
         # Compute prefix states using the vectorized scan.
         # P: (batch, num_chunks+1, chunk_size, hidden_dim)
-        mode == "sequential"
-        if mode == "parallel": 
+        if self.train_mode == "parallel": 
             P = self.vectorized_prefix_scan(level0, dummy, debug=False)
         else: 
             P, L = self.compute_sequential_prefix(input_ids, debug=False)
@@ -591,7 +592,9 @@ def main():
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size.')
+    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
+    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'sequential'],
+                        help='Training mode: parallel or sequential.')
     args = parser.parse_args()
     
     if args.seq_len % args.chunk_size != 0:
@@ -600,7 +603,7 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    output_dir = f"./tree_model/tree_{timestamp}"
+    output_dir = f"../out/tree_model/tree_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -618,7 +621,7 @@ def main():
         dropout=0.1
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=6, T2_num_layers=6)
+                                 T1_num_layers=6, T2_num_layers=6, train_mode=args.train_mode)
     model.to(device)
 
     training_args = TrainingArguments(
