@@ -32,7 +32,7 @@ from transformers.modeling_outputs import CausalLMOutput
 import datasets
 from types import SimpleNamespace
 from typing import Optional
-
+from blelloch_scan import BlellochScan
 import matplotlib.pyplot as plt
 
 def pad_to_chunk(x, chunk_size, pad_token_id, device):
@@ -267,8 +267,15 @@ class TransformerScanModel(nn.Module):
         # P: (batch, num_chunks+1, chunk_size, hidden_dim)
         if self.train_mode == "parallel": 
             P = self.vectorized_prefix_scan(level0, dummy, debug=False)
-        else: 
+        elif self.train_mode == "sequential": 
             P, L = self.compute_sequential_prefix(input_ids, debug=False)
+        elif self.train_mode == "blelloch":
+            combine_fn = self.combine_fn
+            scan = BlellochScan(combine_fn, inclusive=False)
+            P = scan(torch.stack(level0, dim=1))
+        else:
+            raise ValueError("Invalid training mode. Choose 'parallel', 'sequential', or 'blelloch'.")
+
             
         loss_fn = nn.CrossEntropyLoss()
         total_loss = 0.0
@@ -328,6 +335,13 @@ class TransformerScanModel(nn.Module):
         total_loss = total_loss
         return CausalLMOutput(loss=total_loss, logits=all_logits[-1])
     
+    def combine_fn(self, x, y):
+        cat = torch.cat([x, y], dim = 1) # Shape of x and y is (B*K, D, N) where D is chunk size and N is dimension
+        out = self.T1(cat)
+        if isinstance(out, tuple):
+            out = out[0]
+        out = out[:, -self.chunk_size:, :]
+        return out
     
     def combine(self, x, y):
         """
@@ -593,7 +607,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
-    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'sequential'],
+    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'],
                         help='Training mode: parallel or sequential.')
     args = parser.parse_args()
     
