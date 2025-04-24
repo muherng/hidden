@@ -48,11 +48,22 @@ class BlellochScan(nn.Module):
             step = 2 ** lvl
             idx_l = torch.arange(step - 1, P, 2 * step, device=X.device)
             idx_r = idx_l + step
+            K      = idx_l.numel()      # number of pairs at this level
 
-            left  = X[:, :, idx_l, :]
-            right = X[:, :, idx_r, :]
+            left  = X[:, :, idx_l, :] # → (B, D, K, N) where K = len(idx_l)
+            right = X[:, :, idx_r, :] # → (B, D, K, N) where K = len(idx_r)
 
-            merged = self.combine_fn(left, right)
+            left_blocks  = left.permute(0,2,1,3).reshape(B*K, D, N)
+            right_blocks = right.permute(0,2,1,3).reshape(B*K, D, N)
+
+            merged_blocks = self.combine_fn(left_blocks, right_blocks) # (B, D, N) reduce (B, D, N) => (B, D, N)
+
+            # un-fold back to (B, D, K, N)
+            merged = ( merged_blocks
+                    .view(B, K, D, N)
+                    .permute(0,2,1,3)
+                    )
+    
             X_next = X.clone()
             X_next[:, :, idx_r, :] = merged  # in-place on Xn but Xn is non-leaf, so PyTorch records gradients
             X = X_next
@@ -66,12 +77,22 @@ class BlellochScan(nn.Module):
             step = 2 ** lvl
             idx_l = torch.arange(step - 1, P, 2 * step, device=X.device)
             idx_r = idx_l + step
+            K = idx_l.numel()      # number of pairs at this level
 
             old_l = X[:, :, idx_l, :].clone()
             old_r = X[:, :, idx_r, :]
 
-            new_l = old_r                                   # ← set left to old right
-            new_r = self.combine_fn(old_l, old_r)           # ← combine old left, old right
+            old_l_blocks = old_l.permute(0,2,1,3).reshape(B*K, D, N)
+            old_r_blocks = old_r.permute(0,2,1,3).reshape(B*K, D, N)
+
+            new_l_blocks = old_r_blocks       
+            new_r_blocks = self.combine_fn(old_l_blocks, old_r_blocks)  # (B*K, D, N)
+
+            new_r = new_r_blocks.view(B, K, D, N).permute(0,2,1,3)
+            new_l = new_l_blocks.view(B, K, D, N).permute(0,2,1,3)
+
+            # new_l = old_r                                   # ← set left to old right
+            # new_r = self.combine_fn(old_l, old_r)           # ← combine old left, old right of shapes (B, D, N)
 
             X_next = X.clone()
             X_next[:, :, idx_l, :] = new_l
