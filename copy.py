@@ -20,7 +20,6 @@ from transformers import (
     GPT2LMHeadModel,
     PreTrainedModel,
     GPT2Config,
-    GPT2Tokenizer,
     TrainingArguments,
     Trainer,
     set_seed,
@@ -29,13 +28,13 @@ from transformers import (
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.modeling_outputs import CausalLMOutput
 
-import datasets
 from types import SimpleNamespace
 from typing import Optional
 from blelloch_scan import BlellochScan
 import matplotlib.pyplot as plt
 
 def pad_to_chunk(x, chunk_size, pad_token_id, device):
+    # HOW DO I WANT TO PAD?
     # x: (batch, seq_length). Pad x along dim=1 so that seq_length becomes a multiple of chunk_size.
     L = x.size(1)
     remainder = L % chunk_size
@@ -56,31 +55,29 @@ def get_offset(x, chunk_size):
 # -----------------------------------------------------------------------------
 # Dataset and Data Collation (same as before)
 # -----------------------------------------------------------------------------
-class WikiTextDataset(Dataset):
-    def __init__(self, split, tokenizer, seq_len):
-        self.tokenizer = tokenizer
+class CopyDataset(Dataset):
+    def __init__(self, split, seq_len, num_samples=10000):
+        """
+        Generate a dataset of random bitstrings and their last digit as labels.
+        """
         self.seq_len = seq_len
-        
-        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        # self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
-        text = " ".join(self.data["text"])
-        self.tokenizer.model_max_length = int(1e7)
-        self.token_ids = tokenizer.encode(text, add_special_tokens=False)
-        
-        self.samples = []
-        for i in range(0, len(self.token_ids) - seq_len, seq_len):
-            self.samples.append(self.token_ids[i:i+seq_len])
+        self.num_samples = num_samples
+        self.data = []
+        for _ in range(num_samples):
+            bitstring = torch.randint(0, 2, (seq_len,), dtype=torch.long)
+            label = bitstring[-1]  # The last digit
+            self.data.append((bitstring, label))
     
     def __len__(self):
-        return len(self.samples)
+        return self.num_samples
     
     def __getitem__(self, idx):
-        sample = torch.tensor(self.samples[idx], dtype=torch.long)
-        return {"input_ids": sample, "labels": sample}
+        bitstring, label = self.data[idx]
+        return {"input_ids": bitstring, "labels": label}
 
 def collate_fn(batch):
     input_ids = torch.stack([item["input_ids"] for item in batch])
-    labels = torch.stack([item["labels"] for item in batch])
+    labels = torch.tensor([item["labels"] for item in batch], dtype=torch.long)
     return {"input_ids": input_ids, "labels": labels}
 
 # -----------------------------------------------------------------------------
@@ -598,7 +595,7 @@ class TransformerScanModel(nn.Module):
 # -----------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
+        description='Train a GPT2-based Transformer Scan LM on a random bitstring task.'
     )
     parser.add_argument('--seq_len', type=int, default=64*8,
                         help='Number of tokens per sample (must be a multiple of chunk_size).')
@@ -620,14 +617,14 @@ def main():
     output_dir = f"../out/tree_model/tree_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tokenizer.model_max_length = int(1e7)
+    # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    # tokenizer.model_max_length = int(1e7)
 
-    train_dataset = WikiTextDataset(split="train", tokenizer=tokenizer, seq_len=args.seq_len)
-    valid_dataset = WikiTextDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len)
+    train_dataset = CopyDataset(split="train", seq_len=args.seq_len)
+    valid_dataset = CopyDataset(split="validation", seq_len=args.seq_len)
 
     config = GPT2Config(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=2,
         n_positions=1024,
         n_embd=768,
         n_layer=6,
@@ -665,7 +662,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         data_collator=collate_fn,
-        tokenizer=tokenizer,
+        tokenizer=None,  # No tokenizer needed for bitstrings
         callbacks=[PrintLossCallback()]
     )
     from transformers import ProgressCallback
