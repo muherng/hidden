@@ -10,7 +10,7 @@ def multiquery_ar(
     power_a: float=0.01,
     num_kv_pairs: int=8,
     random_non_queries: bool=True,
-    include_slices: bool=True,
+    # include_slices: bool=True,
     **kwargs
 ):
     """

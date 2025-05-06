@@ -617,7 +617,7 @@ class TransformerScanModel(nn.Module):
 # Main Training Code (unchanged)
 # -----------------------------------------------------------------------------
 def main():
-    print("Training Transformer Scan LM with binary tree aggregation on MQAR.")
+    print("Training Transformer Scan LM with binary tree aggregation on MQAR.", flush=True)
     parser = argparse.ArgumentParser(
         description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on MQAR.'
     )
@@ -641,7 +641,7 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    output_dir = f"../out/tree_model/tree_{timestamp}"
+    output_dir = f"../out/ar/tree_model/tree_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
     # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -662,10 +662,10 @@ def main():
 
     config = GPT2Config(
         vocab_size=args.vocab_size, #tokenizer.vocab_size
-        n_positions=128, #32, #1024,
-        n_embd=8, #768,
-        n_layer=1, #6,
-        n_head=1, #12,
+        n_positions=1024,
+        n_embd=768,
+        n_layer=6,
+        n_head=12,
         dropout=0.1
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
