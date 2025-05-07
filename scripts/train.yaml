@@ -1,0 +1,5 @@
+dataset: ['wikitext-103']
+model_type: ['tree']
+model_size: ['standard']
+train_mode: ['blelloch', 'sequential']
+epochs: [10]
