@@ -11,6 +11,9 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 import numpy as np
+import wandb
+from transformers.integrations import WandbCallback
+
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -35,6 +38,10 @@ from typing import Optional
 from blelloch_scan import BlellochScan
 import matplotlib.pyplot as plt
 
+def count_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 def pad_to_chunk(x, chunk_size, pad_token_id, device):
     # x: (batch, seq_length). Pad x along dim=1 so that seq_length becomes a multiple of chunk_size.
     L = x.size(1)
@@ -57,12 +64,16 @@ def get_offset(x, chunk_size):
 # Dataset and Data Collation (same as before)
 # -----------------------------------------------------------------------------
 class WikiTextDataset(Dataset):
-    def __init__(self, split, tokenizer, seq_len):
+    def __init__(self, dataset, split, tokenizer, seq_len):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         
-        self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
-        # self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        if dataset == "wikitext-2":
+            self.data = datasets.load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        elif dataset == "wikitext-103":
+            self.data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+        else:
+            raise ValueError("Unsupported dataset. Choose 'wikitext-2' or 'wikitext-103'.")
         text = " ".join(self.data["text"])
         self.tokenizer.model_max_length = int(1e7)
         self.token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -87,10 +98,11 @@ def collate_fn(batch):
 # Trainer Callbacks (unchanged)
 # -----------------------------------------------------------------------------
 class PrintLossCallback(TrainerCallback):
-    def __init__(self):
+    def __init__(self, log_to_wandb: bool = True):
         self.best_training_loss = float('inf')
         self.best_eval_loss = float('inf')
         self.last_eval_loss = None
+        self.log_to_wandb       = log_to_wandb
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if state.global_step % 100 != 0:
@@ -127,6 +139,14 @@ class PrintLossCallback(TrainerCallback):
             out_str += f"Training Loss: {current_loss:.4f} (Best: {self.best_training_loss:.4f}, Perp: {training_perplexity:.4f})"
         if current_eval_loss is not None:
             out_str += f" | Eval Loss: {current_eval_loss:.4f} (Best: {self.best_eval_loss:.4f}, Perp: {eval_perplexity:.4f})"
+        
+        if self.log_to_wandb:
+            wandb.log({
+                "train/loss": current_loss,
+                "train/ppl": training_perplexity,
+                "eval/loss": current_eval_loss,
+                "eval/ppl": eval_perplexity
+            })
         print(out_str)
 
 class CustomTrainer(Trainer):
@@ -139,6 +159,13 @@ class CustomTrainer(Trainer):
         current_step = self.state.global_step if hasattr(self.state, 'global_step') else 0
         eval_loss = metrics.get("eval_loss", None)
         eval_ppl = np.exp(eval_loss) if eval_loss is not None and eval_loss < 100 else float('inf')
+        
+        # if not self.args.nowandb:
+        #     wandb.log({
+        #         "eval/loss": eval_loss,
+        #         "eval/ppl": eval_ppl
+        #     }, step=current_step)
+        
         self.eval_steps.append(current_step)
         self.eval_ppls.append(eval_ppl)
         plt.figure()
@@ -600,15 +627,22 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
     )
-    parser.add_argument('--seq_len', type=int, default=64*8,
-                        help='Number of tokens per sample (must be a multiple of chunk_size).')
+    parser.add_argument('--seq_len', type=int, default=64*8, help='Number of tokens per sample (must be a multiple of chunk_size).')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
-    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'],
-                        help='Training mode: parallel or sequential.')
+    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'], help='Training mode: parallel or sequential.')     
+    parser.add_argument('--model_size', type=str, default='tiny', choices=['tiny', 'small', 'standard', 'base', 'medium', 'large'], help='Model size: tiny, small, standard, base, medium, or large.')
+    parser.add_argument('--model_type', type=str, default='tree', choices=['tree', 'standard'], help='Model type: tree or standard.')
+    parser.add_argument('--dataset', type=str, default='wikitext-2', choices=['wikitext-2', 'wikitext-103'], help='Dataset to use: wikitext-2 or wikitext-103.')
+
+    # wandb args
+    parser.add_argument("--name", type=str, default="", help="Name of the run")
+    parser.add_argument("--nowandb", action="store_true", help="Debug mode (disable wandb)")
+    parser.add_argument("--wandb_entity", type=str, default="sharut", help="Wandb entity")
+    parser.add_argument("--wandb_project", type=str, default="transformer-compression", help="Wandb project")
     args = parser.parse_args()
     
     if args.seq_len % args.chunk_size != 0:
@@ -616,26 +650,99 @@ def main():
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device:", device)
-    output_dir = f"../out/tree_model/tree_{timestamp}"
+    print("=> Device:", device)
+    run_name = f'{args.dataset}_{args.model_type}_{args.model_size}_seq{args.seq_len}'
+    run_name = f'{run_name}_chunk{args.chunk_size}_{args.train_mode}' if args.model_type == 'tree' else run_name
+    run_name += f'{args.name}_{timestamp}'
+    print("=> Run name:", run_name)
+    output_dir = f"../out/tree_model/{run_name}"
     os.makedirs(output_dir, exist_ok=True)
 
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    # ── Initialize W&B ─────────────────────────────────────────────────────
+    if not args.nowandb:
+        wandb.init(
+            project=args.wandb_project,
+            name=f'run_{run_name}',
+            entity=args.wandb_entity,
+            config=vars(args),
+            reinit=True
+        )
+    # Now wandb.config.* holds all your CLI flags
+    # ─────────────────────────────────────────────────────────────────────────
+
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     tokenizer.model_max_length = int(1e7)
 
-    train_dataset = WikiTextDataset(split="train", tokenizer=tokenizer, seq_len=args.seq_len)
-    valid_dataset = WikiTextDataset(split="validation", tokenizer=tokenizer, seq_len=args.seq_len)
+    train_dataset = WikiTextDataset(dataset= args.dataset, split="train", tokenizer=tokenizer, seq_len=args.seq_len)
+    valid_dataset = WikiTextDataset(dataset= args.dataset, split="validation", tokenizer=tokenizer, seq_len=args.seq_len)
 
-    config = GPT2Config(
-        vocab_size=tokenizer.vocab_size,
-        n_positions=1024,
-        n_embd=768,
-        n_layer=6,
-        n_head=12,
-        dropout=0.1
-    )
-    model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=6, T2_num_layers=6, train_mode=args.train_mode)
+    # config = GPT2Config(
+    #     vocab_size=tokenizer.vocab_size,
+    #     n_positions=1024,
+    #     n_embd=768,
+    #     n_layer=6,
+    #     n_head=12,
+    #     dropout=0.1
+    # )
+    # config = GPT2Config.from_pretrained(base_model_name)
+    # --- build config based on model_size ---
+    if args.model_size == 'tiny':
+        # ~0.2M params
+        config = GPT2Config(
+            vocab_size=tokenizer.vocab_size,
+            n_positions=args.seq_len,
+            n_ctx=args.seq_len,
+            n_embd=64,
+            n_layer=3,
+            n_head=2,
+            dropout=0.1
+        )
+    elif args.model_size == 'small':
+        # ~1.2M params
+        config = GPT2Config(
+            vocab_size=tokenizer.vocab_size,
+            n_positions=args.seq_len,
+            n_ctx=args.seq_len,
+            n_embd=128,
+            n_layer=6,
+            n_head=4,
+            dropout=0.1
+        )
+    elif args.model_size == 'standard':
+        # ~9.5M params
+        config = GPT2Config(
+            vocab_size=tokenizer.vocab_size,
+            n_positions=args.seq_len,
+            n_ctx=args.seq_len,
+            n_embd=256,
+            n_layer=12,
+            n_head=8,
+            dropout=0.1
+        )
+    elif args.model_size == 'base':
+        # use pretrained GPT2
+        config = GPT2Config.from_pretrained("gpt2")
+        config.vocab_size = tokenizer.vocab_size
+    elif args.model_size == 'medium':
+        # use pretrained GPT2‑Medium
+        config = GPT2Config.from_pretrained("gpt2-medium")
+        config.vocab_size = tokenizer.vocab_size
+    else:  # 'large'
+        config = GPT2Config.from_pretrained("gpt2-large")
+        config.vocab_size = tokenizer.vocab_size
+
+    print("=> Model config:", config)
+
+    if args.model_type == 'tree':
+        config.n_layer = int(config.n_layer / 2)
+        print('=> Using tree model with half the number of layers:', config.n_layer)
+        model = TransformerScanModel(config, chunk_size=args.chunk_size,
+                                    T1_num_layers=config.n_layer, T2_num_layers=config.n_layer, train_mode=args.train_mode) 
+    else:
+        model = GPT2LMHeadModel(config)
+        model.resize_token_embeddings(tokenizer.vocab_size)
+    
+    print(f"{args.model_type} model params: {count_params(model)/1e6:.2f} M")
     model.to(device)
 
     training_args = TrainingArguments(
@@ -653,10 +760,10 @@ def main():
         fp16=False,
         seed=args.seed,
         lr_scheduler_type="cosine",
-        report_to="tensorboard",
+        report_to=["wandb"] if not args.nowandb else ["tensorboard"],
         max_grad_norm=1.0,
         logging_dir="./logs",
-        save_total_limit=2
+        save_total_limit=2,
     )
 
     trainer = CustomTrainer(
@@ -666,11 +773,10 @@ def main():
         eval_dataset=valid_dataset,
         data_collator=collate_fn,
         tokenizer=tokenizer,
-        callbacks=[PrintLossCallback()]
+        callbacks=[PrintLossCallback(log_to_wandb=not args.nowandb)],
     )
     from transformers import ProgressCallback
     trainer.remove_callback(ProgressCallback)
-    
     trainer.train()
 
 if __name__ == "__main__":
