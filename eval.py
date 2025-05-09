@@ -25,7 +25,7 @@ config = GPT2Config(
         n_head=1,
         dropout=0.1
     )
-model = TransformerScanModel(config, chunk_size, T1_num_layers=1, T2_num_layers=1, track_eranks=True)
+model = TransformerScanModel(config, chunk_size, T1_num_layers=1, T2_num_layers=1) #, track_eranks=True
 model.eval()
 
 # Define the configuration for the TransformerScan model
@@ -43,6 +43,7 @@ model.eval()
 #         n_head=1,
 #         dropout=0.1
 #     )
+
 # # Load the pre-trained TransformerScan model
 # model_path = "out/mqar_128/tree_model_128/tree_20250509_110213/checkpoint-200000" #tree_20250507_174245
 # model = TransformerScanModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=2, T2_num_layers=2, device=device) #, track_eranks=True
@@ -86,11 +87,15 @@ def test_model(model, dataset):
     # print("Inputs: " + str(dataset.inputs))
     # print("Labels: " + str(dataset.labels))
     # print("model: " + str(model(dataset.inputs).logits.shape))
-    pred = torch.argmax(model(dataset.inputs).logits, dim=-1)
+
+    ### predict using model()
+    #pred = torch.argmax(model(dataset.inputs).logits, dim=-1)
+    # print("Pred: " + str(pred))
+    # print("Shape: " + str(pred.shape))
+
+    ### predict using model.forward_inference()
+    pred = predict(model, dataset.inputs)
     print("Pred: " + str(pred))
-    print("Shape: " + str(pred.shape))
-    pred2 = predict(model, dataset.inputs)
-    print("Pred2: " + str(pred2))
     pred = pred[valid] # do I need to offset this?
     labels = dataset.labels[valid]
     # print("Labels: " + str(labels))
@@ -100,6 +105,7 @@ def test_model(model, dataset):
     # print("correct: " + str(correct))
     total = labels.numel() #& labels != -100
     print(str(total))
+    
     # Calculate accuracy
     accuracy = correct / total
     return accuracy
