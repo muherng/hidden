@@ -611,7 +611,7 @@ class TransformerScanModel(nn.Module):
         # Finally, move the model to the desired device.
         model.to(device)
         return model
-    
+
 
 # -----------------------------------------------------------------------------
 # Main Training Code (unchanged)
@@ -628,10 +628,11 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
+    parser.add_argument('--n_embd', type=int, default=768, help='Embedding dimension.')
     parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'],
                         help='Training mode: parallel or sequential.')
     parser.add_argument('--vocab_size', type=int, default=8192, help='Vocabulary size.')
-    parser.add_argument('--num_train_examples', type=int, default=10000, help='Number of training examples.')
+    parser.add_argument('--num_train_examples', type=int, default=100000, help='Number of training examples.')
     parser.add_argument('--num_valid_examples', type=int, default=3000, help='Number of validation examples.')
     args = parser.parse_args()
 
@@ -641,7 +642,7 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    output_dir = f"../out/ar/tree_model/tree_{timestamp}"
+    output_dir = f"out/mqar_{args.seq_len}/tree_model_{args.n_embd}/tree_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
     # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -663,13 +664,13 @@ def main():
     config = GPT2Config(
         vocab_size=args.vocab_size, #tokenizer.vocab_size
         n_positions=1024,
-        n_embd=768,
-        n_layer=6,
-        n_head=12,
+        n_embd=args.n_embd,
+        n_layer=2, #6,
+        n_head=1, #12,
         dropout=0.1
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=6, T2_num_layers=6, train_mode=args.train_mode)
+                                 T1_num_layers=2, T2_num_layers=2, train_mode=args.train_mode)
     model.to(device)
 
     training_args = TrainingArguments(
@@ -706,6 +707,7 @@ def main():
     trainer.remove_callback(ProgressCallback)
     
     trainer.train()
+
 
 if __name__ == "__main__":
     main()
