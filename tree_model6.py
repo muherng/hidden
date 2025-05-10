@@ -192,7 +192,7 @@ class T0(nn.Module):
     def __init__(self, config, chunk_size):
         super().__init__()
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.wpe = nn.Embedding(chunk_size, config.n_embd)
+        self.wpe = nn.Embedding(config.n_positions, config.n_embd)  # Changed from chunk_size to n_positions
         self.chunk_size = chunk_size
         self.drop = nn.Dropout(config.embd_pdrop)
 
@@ -290,8 +290,10 @@ class TransformerScanModel(nn.Module):
         # Split input into chunks: shape (batch, num_chunks, chunk_size)
         chunks = input_ids.view(batch_size, num_chunks, self.chunk_size)
         
-        # Compute T0 embeddings for each chunk.
-        level0 = [self.T0(chunks[:, i, :]) for i in range(num_chunks)]
+        # Compute T0 embeddings for the entire sequence at once
+        embeddings = self.T0(input_ids)  # (batch, seq_length, hidden_dim)
+        # Reshape embeddings into chunks
+        level0 = [embeddings[:, i*self.chunk_size:(i+1)*self.chunk_size, :] for i in range(num_chunks)]
         # Each element in level0: (batch, chunk_size, hidden_dim)
         
         # Define dummy state.
