@@ -13,6 +13,9 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import wandb
 from transformers.integrations import WandbCallback
+import sys
+import yaml
+from itertools import product
 
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -623,38 +626,18 @@ class TransformerScanModel(nn.Module):
 # -----------------------------------------------------------------------------
 # Main Training Code (unchanged)
 # -----------------------------------------------------------------------------
-def main():
-    parser = argparse.ArgumentParser(
-        description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
-    )
-    parser.add_argument('--seq_len', type=int, default=64*8, help='Number of tokens per sample (must be a multiple of chunk_size).')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
-    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
-    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'], help='Training mode: parallel or sequential.')     
-    parser.add_argument('--model_size', type=str, default='tiny', choices=['tiny', 'small', 'standard', 'base', 'medium', 'large'], help='Model size: tiny, small, standard, base, medium, or large.')
-    parser.add_argument('--model_type', type=str, default='tree', choices=['tree', 'standard'], help='Model type: tree or standard.')
-    parser.add_argument('--dataset', type=str, default='wikitext-2', choices=['wikitext-2', 'wikitext-103'], help='Dataset to use: wikitext-2 or wikitext-103.')
-
-    # wandb args
-    parser.add_argument("--name", type=str, default="", help="Name of the run")
-    parser.add_argument("--nowandb", action="store_true", help="Debug mode (disable wandb)")
-    parser.add_argument("--wandb_entity", type=str, default="sharut", help="Wandb entity")
-    parser.add_argument("--wandb_project", type=str, default="transformer-compression", help="Wandb project")
-    args = parser.parse_args()
-    
+def main(args):
     if args.seq_len % args.chunk_size != 0:
         raise ValueError("seq_len must be a multiple of chunk_size.")
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("=> Device:", device)
-    run_name = f'{args.dataset}_{args.model_type}_{args.model_size}_seq{args.seq_len}'
+    print("=> Device:", device, flush=True)
+    run_name = f'{args.dataset}_{args.model_type}_{args.model_size}_seq{args.seq_len}_bs{args.batch_size}_lr{args.learning_rate}_ep{args.epochs}'
     run_name = f'{run_name}_chunk{args.chunk_size}_{args.train_mode}' if args.model_type == 'tree' else run_name
+    run_name = f'{run_name}_t1_{args.t1_layers}_t2_{args.t2_layers}' if args.t1_layers > 0 and args.t2_layers > 0 and args.model_type == 'tree' else run_name
     run_name += f'{args.name}_{timestamp}'
-    print("=> Run name:", run_name)
+    print("=> Run name:", run_name, flush=True)
     output_dir = f"../out/tree_model/{run_name}"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -719,6 +702,16 @@ def main():
             n_head=8,
             dropout=0.1
         )
+    elif args.model_size == 'morris_config':
+        config = GPT2Config(
+            vocab_size=tokenizer.vocab_size,
+            n_positions=args.seq_len,
+            n_ctx=args.seq_len,
+            n_embd=768,
+            n_layer=12,
+            n_head=12,
+            dropout=0.1
+        )
     elif args.model_size == 'base':
         # use pretrained GPT2
         config = GPT2Config.from_pretrained("gpt2")
@@ -734,10 +727,12 @@ def main():
     print("=> Model config:", config)
 
     if args.model_type == 'tree':
-        config.n_layer = int(config.n_layer / 2)
-        print('=> Using tree model with half the number of layers:', config.n_layer)
+        nlayers_t1 = nlayers_t2 = int(config.n_layer / 2)
+        nlayers_t1 = args.t1_layers if args.t1_layers > 0 else nlayers_t1
+        nlayers_t2 = args.t2_layers if args.t2_layers > 0 else nlayers_t2
+        print('=> Using tree model with T1 layers:', nlayers_t1, 'T2 layers:', nlayers_t2, flush=True)
         model = TransformerScanModel(config, chunk_size=args.chunk_size,
-                                    T1_num_layers=config.n_layer, T2_num_layers=config.n_layer, train_mode=args.train_mode) 
+                                    T1_num_layers=nlayers_t1, T2_num_layers=nlayers_t2, train_mode=args.train_mode) 
     else:
         model = GPT2LMHeadModel(config)
         model.resize_token_embeddings(tokenizer.vocab_size)
@@ -779,5 +774,69 @@ def main():
     trainer.remove_callback(ProgressCallback)
     trainer.train()
 
+
+def get_args():
+    parser = argparse.ArgumentParser(
+        description='Train a GPT2-based Transformer Scan LM with binary tree aggregation on WikiText-2.'
+    )
+    parser.add_argument('--seq_len', type=int, default=64*8, help='Number of tokens per sample (must be a multiple of chunk_size).')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed.')
+    parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
+    parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'], help='Training mode: parallel or sequential.')     
+    parser.add_argument('--model_size', type=str, default='tiny', choices=['tiny', 'small', 'standard', 'morris_config', 'base', 'medium', 'large'], help='Model size: tiny, small, standard, base, medium, or large.')
+    parser.add_argument('--model_type', type=str, default='tree', choices=['tree', 'standard'], help='Model type: tree or standard.')
+    parser.add_argument('--dataset', type=str, default='wikitext-2', choices=['wikitext-2', 'wikitext-103'], help='Dataset to use: wikitext-2 or wikitext-103.')
+    parser.add_argument('--t1_layers', type=int, default=0, help='Number of layers in T1 (aggregation module).')
+    parser.add_argument('--t2_layers', type=int, default=0, help='Number of layers in T2 (autoregressive module).')
+
+    # wandb args
+    parser.add_argument("--name", type=str, default="", help="Name of the run")
+    parser.add_argument("--nowandb", action="store_true", help="Debug mode (disable wandb)")
+    parser.add_argument("--wandb_entity", type=str, default="sharut", help="Wandb entity")
+    parser.add_argument("--wandb_project", type=str, default="transformer-compression", help="Wandb project")
+    return parser
+
+
+
 if __name__ == "__main__":
-    main()
+    outer_parser = argparse.ArgumentParser(description="Synthetic Search Experiment")
+    outer_parser.add_argument("-c", "--config", type=str, default="config.json", help="Configuration file")
+    outer_parser.add_argument("-s", "--slurm", action="store_true", help="Launched with slurm")
+    outer_parser.add_argument("-d", "--debug", action="store_true", help="Debug mode")
+    outer_parser.add_argument("-f", "--force_wandb", action="store_true", help="Debug mode")
+
+    outer_args, remaining_args = outer_parser.parse_known_args()
+
+    if outer_args.debug:
+        print("Running command-line arguments...")
+        inner_parser = get_args()
+        args = inner_parser.parse_args(remaining_args)  # Pass remaining CLI args
+        args.nowandb = False if outer_args.force_wandb else True
+        main(args)
+        sys.exit(1)
+
+    with open(outer_args.config, "r") as f:
+        args = yaml.load(f, Loader=yaml.FullLoader)
+
+    inner_parser = get_args()
+    keys, values = zip(*args.items())
+    combinations = [dict(zip(keys, v)) for v in product(*[v if isinstance(v, list) else [v] for v in values])]
+    if outer_args.slurm:
+        # Not running on SLURM
+        job_id = int(os.getenv("SLURM_ARRAY_TASK_ID", "-1"))
+        if job_id < 0 or job_id >= len(combinations):
+            print("Invalid SLURM_ARRAY_TASK_ID")
+            sys.exit(1)
+        combination = combinations[job_id]
+        args = inner_parser.parse_args([], argparse.Namespace(**combination))
+        main(args)
+    else:
+        # Running in debug mode; loop through args
+        for combination in combinations:
+            args = inner_parser.parse_args([], argparse.Namespace(**combination))
+            main(args)
+    
+    

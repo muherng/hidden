@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=compressed
-#SBATCH --output=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Unpaired-MultiModal-Alignment/fewshot_clip/logs/%A/%A_%a.out
-#SBATCH --error=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Unpaired-MultiModal-Alignment/fewshot_clip/logs/%A/%A_%a.err
+#SBATCH --output=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden/logs/%A/%A_%a.out
+#SBATCH --error=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden/logs/%A/%A_%a.err
 #SBATCH --account=vision-phillipi
-#SBATCH --partition=csail-shared
-#SBATCH --qos=lab-free
+#SBATCH --partition=vision-phillipi
+#SBATCH --qos=vision-phillipi-main
 #SBATCH --gres=gpu:1
-#SBATCH --time=24:00:00
+#SBATCH --time=96:00:00
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=16G
-#SBATCH --nodelist=isola-h100-1
+#SBATCH --nodelist=isola-h200-1
 #SBATCH --array=0-0  # dummy; will be overridden by the launcher
 
 # ----------------------------
@@ -59,8 +59,8 @@ echo "==== Checking if torch is installed ===="
 python -c "import torch; print('PyTorch version:', torch.__version__)"
 
 # Set Python path and change directory
-export PYTHONPATH=$PYTHONPATH:/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Unpaired-MultiModal-Alignment/fewshot_clip
-cd /data/vision/torralba/selfmanaged/isola/projects/sharut/code/Unpaired-MultiModal-Alignment/fewshot_clip
+export PYTHONPATH=$PYTHONPATH:/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden
+cd /data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden
 
 # Run your Python script
 python tree_model6.py -s -c scripts/train.yaml
