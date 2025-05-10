@@ -194,13 +194,14 @@ class T0(nn.Module):
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(chunk_size, config.n_embd)
         self.chunk_size = chunk_size
+        self.drop = nn.Dropout(config.embd_pdrop)
 
     def forward(self, input_ids):
         token_emb = self.wte(input_ids)                   # (batch, seq_len, hidden_dim)
         seq_len = input_ids.size(1)
         positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         pos_emb = self.wpe(positions)                      
-        return token_emb + pos_emb
+        return self.drop(token_emb + pos_emb)
 
 class T1(nn.Module):
     """
@@ -211,11 +212,12 @@ class T1(nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList([GPT2Block(config) for _ in range(num_layers)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.drop = nn.Dropout(config.resid_pdrop)
     def forward(self, x):
         for block in self.blocks:
             x = block(x, attention_mask=None, use_cache=False, output_attentions=False)[0]
         x = self.ln_f(x)
-        return x
+        return self.drop(x)
 
 class T2(nn.Module):
     """
@@ -226,6 +228,7 @@ class T2(nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList([GPT2Block(config) for _ in range(num_layers)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.drop = nn.Dropout(config.resid_pdrop)
     def forward(self, x, causal_mask, past_key_values=None):
         new_past = []
         for i, block in enumerate(self.blocks):
@@ -233,7 +236,7 @@ class T2(nn.Module):
             x, present = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
             new_past.append(present)
         x = self.ln_f(x)
-        return x, tuple(new_past)
+        return self.drop(x), tuple(new_past)
     
 def parallel_fold(S, op):
     """
