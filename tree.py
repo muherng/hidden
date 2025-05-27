@@ -148,6 +148,7 @@ class T1(nn.Module):
         self.blocks = nn.ModuleList([GPT2Block(config) for _ in range(num_layers)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
     def forward(self, x):
+        # print("T1 executed!!")
         for block in self.blocks:
             x = block(x, attention_mask=None, use_cache=False, output_attentions=False)[0]
         x = self.ln_f(x)
@@ -166,6 +167,7 @@ class T2(nn.Module):
         self.drop = nn.Dropout(config.resid_pdrop)  # Add residual dropout
         
     def forward(self, x, causal_mask=None, past_key_values=None):
+        # print("T2 executed!!")
         # If no causal mask provided, create one
         if causal_mask is None:
             seq_length = x.size(1)

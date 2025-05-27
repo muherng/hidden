@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 
 from torch.utils.data import Dataset
-from tree_ar import TransformerScanModel
+from tree import TransformerScanModel
 from tree_ar2 import AssociativeRecallDataset
+from tree_copy import CopyDataset
 
 from transformers import GPT2Config
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
@@ -12,21 +13,24 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 device="cpu"
 print("Device:", device)
 
-# Small model for testing
-chunk_size = 2
-vocab_size = 100
-num_examples = 2
-input_seq_len = 8
-num_kv_pairs = 2
-seed = 117
-config = GPT2Config(
-        vocab_size=vocab_size, #tokenizer.vocab_size
-        n_positions=1024,
-        n_embd=8, #768,
-        n_layer=2, #6,
-        n_head=1,
-        dropout=0.1
-    )
+def get_accuracy(outputs, labels): 
+    logits = outputs["logits"]
+    print(outputs.keys())
+    # labels = outputs["labels"]
+    preds = torch.argmax(torch.tensor(logits), dim=-1)
+    # labels = torch.tensor(labels)
+
+    # Flatten if needed
+    if preds.ndim > 1:
+        preds = preds.view(-1)
+        labels = labels.view(-1)
+
+    mask = labels != -100  # Ignore padding or masked labels
+    correct = (preds[mask] == labels[mask]).sum().item()
+    total = mask.sum().item()
+    accuracy = correct / total if total > 0 else 0.0
+    return accuracy
+
 class T1(nn.Module):
     """
     T1: Aggregation module.
@@ -72,7 +76,7 @@ class AnalyzeTreeModel(TransformerScanModel):
     """Tree model with direct output supervision."""
     
     def __init__(self, config, chunk_size= 32, T1_num_layers = 1, T2_num_layers = 1):
-        super().__init__(config, chunk_size=chunk_size, T1_num_layers = T1_num_layers, T2_num_layers = T2_num_layers, train_mode="sequential")
+        super().__init__(config, chunk_size=chunk_size, T1_num_layers = T1_num_layers, T2_num_layers = T2_num_layers) # , train_mode="sequential"
         self.T1 = T1(config, num_layers=T1_num_layers)
         self.T2 = T2(config, num_layers=T2_num_layers)
         self.eranks = []
@@ -86,14 +90,31 @@ class AnalyzeTreeModel(TransformerScanModel):
 
     def combine(self, x, y):
         erank = self.erank(torch.cat([x[0], y[0]], dim=1))
-        print("erank: " + str(erank))
+        # print("erank: " + str(erank))
         out, dummy = super().combine(x, y)
         self.eranks.append(torch.stack((erank, self.erank(out))))
         return out, dummy
 
-model = AnalyzeTreeModel(config, chunk_size, T1_num_layers=1, T2_num_layers=1) #, track_eranks=True
-model.eval()
+def entropy(x):
+    # element wise entropy
+    return -x * torch.log(x)
 
+# # Small model for testing
+# chunk_size = 2
+# vocab_size = 100
+# num_examples = 2
+# input_seq_len = 8
+# num_kv_pairs = 2
+# seed = 117
+# config = GPT2Config(
+#         vocab_size=vocab_size, #tokenizer.vocab_size
+#         n_positions=1024,
+#         n_embd=8, #768,
+#         n_layer=2, #6,
+#         n_head=1,
+#         dropout=0.1
+#     )
+    
 # Define the configuration for the TransformerScan model
 # chunk_size = 64
 # vocab_size = 8192
@@ -115,47 +136,70 @@ model.eval()
 # model = TransformerScanModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=2, T2_num_layers=2, device=device) #, track_eranks=True
 # model.eval()
 
+# config = GPT2Config(
+#         vocab_size=8192, #tokenizer.vocab_size
+#         n_positions=1024,
+#         n_embd=384, #128,
+#         n_layer=4, #2, #6,
+#         n_head=6, #1, #12,
+#         dropout=0.1
+#     )
+# input_seq_len = 256 # 128 #
+
+chunk_size = 32 #256 # 16 # input_seq_len
+num_examples= 5
+num_kv_pairs = 4
+
+# Load the pre-trained TransformerScan model
+# model_path = "out/copy_128/tree_model_128/tree_20250513_161249/checkpoint-3125"
+# model_path = "out/copy_128/tree_model_128/trafo/tree_20250513_160344/checkpoint-3125" #tree_20250507_174245
+model_path = "out/mqar_128/tree_model_384/tree_20250514_163721/tree_20250514_163721/checkpoint-200000"
+# model_path = "out/mqar_128/tree_model_384/trafo_20250514_223812/tree_20250514_223812/checkpoint-200000" #tree_20250507_174245
+# model = TransformerScanModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=config.n_layer, T2_num_layers=config.n_layer, device=device) #, track_eranks=True
+
+
+# # Create the test dataset
+# test_data = AssociativeRecallDataset(   
+#     vocab_size=8192,
+#     num_examples=num_examples,
+#     input_seq_len=input_seq_len,
+#     seed=56,
+#     power_a=0.01,
+#     num_kv_pairs=num_kv_pairs,
+# )
+
 # Create the test dataset
-test_data = AssociativeRecallDataset(   # multiquery_ar(
-    vocab_size=vocab_size,
-    num_examples=num_examples,
-    input_seq_len=input_seq_len,
-    seed=seed,
-    power_a=0.01,
-    num_kv_pairs=num_kv_pairs,
+test_data = CopyDataset(   
+    num_samples=num_examples,
+    seq_len=input_seq_len
 )
 
+model = AnalyzeTreeModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=config.n_layer, T2_num_layers=config.n_layer) #, track_eranks=True
+model.eval()
 outputs = model(test_data.inputs) #.to(device)
-eranks = torch.stack(model.eranks)
-eranks_ratio = eranks[:, 1] / eranks[:, 0] #clean up occasions when combine does nothing?
-print("Effective rank ratio: " + str(eranks_ratio.mean(-1)))
 
-T1_attentions = model.T1.att
-T2_attentions = model.T2.att
-# print(f"Num layers: {len(T1_attentions)}")
-# print(f"Shape of attention from layer 0: {T1_attentions[0].shape}")
-print("T1 attentions: " + str(T1_attentions))
-print("T2 attentions: " + str(T2_attentions))
-# # test_data.to(device)
+# Calculate and print the accuracy
+accuracy = get_accuracy(outputs, test_data.labels)
+print(f"Model accuracy on test dataset: {accuracy * 100:.2f}%")
 
-# def predict(model, inputs):
-#     # Initialize states
-#     L = None
-#     chunks_processed = 0
-#     prefix_val = None
-#     past_key_values = None
-#     # Predict each token in the sequence
-#     predictions = torch.empty_like(inputs, dtype=torch.long)
-#     for i in range(input_seq_len):
-#         # Pass the sequence up to the current token
-#         logits, L, chunks_processed, prefix_val, past_key_values = model.forward_inference(
-#             inputs[:, :i+1], L, chunks_processed, prefix_val, past_key_values
-#         )
-#         # Get the predicted token (argmax of logits)
-#         predicted_token = torch.argmax(logits, dim=-1)
-#         predictions[:, i] = predicted_token
+# ### for T1 or when Trafo:
+# T1_attentions = torch.stack(model.T1.att) # shape: (num_layers, batch_size, num_heads, seq_len, seq_len)
+# H_per_token_T1 = entropy(model.T2.att).nansum(-2)
+# mean_H_T1 = H_per_token.mean()
+# print("Mean entropy per token T1: " + str(mean_H_T1))
 
-#     return predictions
+### for T2 when Tree:
+H_per_token_T2 = []
+for att in model.T2.att:
+    H_per_token_T2.append(entropy(att).nansum(-2).flatten()) # shape of each entry before flattening: (batch_size, num_heads, seq_len)
+    mean_H_T2 = torch.cat(H_per_token_T2).mean()
+print("Mean entropy per token T2: " + str(mean_H_T2))
+
+
+# eranks = torch.stack(model.eranks)
+# eranks_ratio = eranks[:, 1] / eranks[:, 0] #clean up occasions when combine does nothing?
+# print("Effective rank ratio: " + str(eranks_ratio.mean(-1)))
+
 
 # # Evaluate the model on the test dataset
 # def test_model(model, dataset):
@@ -187,7 +231,3 @@ print("T2 attentions: " + str(T2_attentions))
 #     # Calculate accuracy
 #     accuracy = correct / total
 #     return accuracy
-
-# # Calculate and print the accuracy
-# accuracy = test_model(model, test_data)
-# print(f"Model accuracy on test dataset: {accuracy * 100:.2f}%")
