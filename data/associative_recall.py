@@ -1,6 +1,8 @@
 
 import numpy as np
 import torch
+import os
+from torch.utils.data import Dataset
 
 def multiquery_ar(
     vocab_size: int,
@@ -121,6 +123,109 @@ def multiquery_ar(
     return inputs,  labels
        # slices={"num_kv_pairs": num_kv_pairs, "input_seq_len": input_seq_len}
     
+
+class AssociativeRecallDataset(Dataset):
+    def __init__(self, vocab_size, num_examples, input_seq_len, seed, power_a=0.01, num_kv_pairs=8, **kwargs):
+        """
+        Dataset for the multi-query associative recall task.
+        """
+        path = os.path.join("data", f"mqar_{input_seq_len}_seq_len_{num_examples}_examples_{vocab_size}_tokens_seed_{seed}_power_{power_a}_kv_{num_kv_pairs}")
+        file = os.path.join(path, "inputs.pt")
+        if os.path.exists(file):
+            print(f"Loading dataset from {path}")
+            self.inputs = torch.load(os.path.join(path, "inputs.pt"))
+            self.labels = torch.load(os.path.join(path, "labels.pt"))
+        else:
+            print(f"Generating dataset and saving to {path}")
+            os.makedirs(path, exist_ok=True)
+            self.inputs, self.labels = multiquery_ar(
+                vocab_size=vocab_size,
+                num_examples=num_examples,
+                input_seq_len=input_seq_len,
+                seed=seed,
+                power_a=power_a,
+                num_kv_pairs=num_kv_pairs,
+                **kwargs
+            )
+            torch.save(self.inputs, os.path.join(path, "inputs.pt"))
+            torch.save(self.labels, os.path.join(path, "labels.pt"))
+
+        # self.inputs, self.labels = multiquery_ar(
+        #     vocab_size=vocab_size,
+        #     num_examples=num_examples,
+        #     input_seq_len=input_seq_len,
+        #     seed=seed,
+        #     **kwargs
+        # )
+
+    def __len__(self):
+        return self.inputs.size(0)
+
+    def __getitem__(self, idx):
+        return {"input_ids": self.inputs[idx], "labels": self.labels[idx]}
+    
+
+def multiquery_ar_offset(
+    vocab_size: int,
+    num_examples: int,
+    input_seq_len: int,
+    seed: int,
+    chunk_size: int = 32,
+    power_a: float = 0.01,
+    num_kv_pairs: int = 8,
+    random_non_queries: bool = True,
+    **kwargs
+):
+    assert input_seq_len % 2 == 0, "input_seq_len must be even"
+    assert vocab_size > input_seq_len
+    assert num_kv_pairs * 4 <= input_seq_len
+
+    np.random.seed(seed)
+
+    context_size = num_kv_pairs * 2
+
+    key_vocab_size = vocab_size // 2
+    key_choices = np.arange(1, key_vocab_size)
+    value_choices = np.arange(key_vocab_size, vocab_size)
+
+    keys_unshuffled = np.tile(key_choices, (num_examples, 1))
+    keys = np.apply_along_axis(np.random.choice, 1, keys_unshuffled, replace=False, size=num_kv_pairs)
+
+    values_unshuffled = np.tile(value_choices, (num_examples, 1))
+    values = np.apply_along_axis(np.random.choice, 1, values_unshuffled, replace=False, size=num_kv_pairs)
+
+    kvs = np.zeros((num_examples, context_size), dtype=np.int64)
+    kvs[:, 0::2] = keys
+    kvs[:, 1::2] = values
+
+    available_query_space = (input_seq_len - context_size) // 2
+    max_offset = available_query_space - chunk_size
+
+    assert max_offset > 0, "chunk_size too large for input sequence length."
+
+    p = power_a * np.arange(1, max_offset + 1) ** (power_a - 1)
+    p = p / p.sum()
+
+    x = np.stack([np.arange(max_offset, dtype=int)] * num_examples)
+    sampled_offsets = np.apply_along_axis(np.random.choice, axis=1, arr=x, replace=False, p=p, size=num_kv_pairs)
+
+    # Add chunk_size to enforce the minimum separation between KV and query
+    gaps = sampled_offsets + chunk_size
+
+    queries = np.zeros((num_examples, input_seq_len - context_size + 1), dtype=np.int64)
+    np.put_along_axis(queries, (gaps * 2), values=keys, axis=1)
+
+    examples = np.concatenate([kvs, queries], axis=1)
+
+    labels = np.full((num_examples, input_seq_len + 1), -100, dtype=np.int64)
+    np.put_along_axis(labels, (gaps * 2) + context_size + 1, values=values, axis=1)
+
+    inputs, labels = torch.tensor(examples[:, :-1]), torch.tensor(labels[:, 1:])
+
+    if random_non_queries:
+        inputs[inputs == 0] = torch.randint(vocab_size, size=inputs.shape)[inputs == 0]
+
+    return inputs, labels
 
 
 

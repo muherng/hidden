@@ -1,5 +1,4 @@
 from tree import TransformerScanModel
-from torch.utils.data import Dataset
 import torch
 import torch.nn as nn
 import os
@@ -7,6 +6,7 @@ import argparse
 import datetime
 import math
 import numpy as np
+import csv
 
 from transformers import (
     GPT2Config,
@@ -16,30 +16,10 @@ from transformers import (
     TrainerCallback
 )
 
-from data.associative_recall import multiquery_ar
+from data.associative_recall import AssociativeRecallDataset
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 TOL = 1e-6  # Tolerance to determine if a tensor is the dummy
-
-
-class AssociativeRecallDataset(Dataset):
-    def __init__(self, vocab_size, num_examples, input_seq_len, seed, **kwargs):
-        """
-        Dataset for the multi-query associative recall task.
-        """
-        self.inputs, self.labels = multiquery_ar(
-            vocab_size=vocab_size,
-            num_examples=num_examples,
-            input_seq_len=input_seq_len,
-            seed=seed,
-            **kwargs
-        )
-
-    def __len__(self):
-        return self.inputs.size(0)
-
-    def __getitem__(self, idx):
-        return {"input_ids": self.inputs[idx], "labels": self.labels[idx]}
 
 def collate_fn(batch):
     input_ids = torch.stack([item["input_ids"] for item in batch])
@@ -222,21 +202,21 @@ class TreeModel(TransformerScanModel):
         labels=None,
         **kwargs):
         outputs = super().forward(input_ids, labels=None, output_hidden_states=True, return_dict=True)
-        loss = 0
+        # loss = 0
         loss_fct = nn.CrossEntropyLoss()
 
         # final logits
+        # print("input_ids: " + str(input_ids.shape))
+        # print("labels: " + str(labels.shape))
         final_logits = outputs["logits"]
+        # print("final_logits: " + str(final_logits.shape))
         # compute loss
         if labels is not None:
             # compute loss
-            # print("labels: " + str(labels))
-            # print("final_logits: " + str(final_logits))
-            # print("final_logits view: " + str(final_logits.view(-1, self.config.vocab_size)))
-            # print("labels view: " + str(labels.view(-1)))
-            loss += loss_fct(final_logits.view(-1, self.config.vocab_size), labels.view(-1))
-            # add to the total loss
-            # outputs["loss"] += loss 
+            # print("final_logits view: " + str(final_logits.view(-1, self.config.vocab_size).shape))
+            # print("labels view: " + str(labels.view(-1).shape))
+            loss = loss_fct(final_logits.view(-1, self.config.vocab_size), labels.view(-1))
+            # outputs["loss"] = loss 
         return loss, outputs # 
     
 # -----------------------------------------------------------------------------
@@ -251,10 +231,13 @@ def main():
                         help='Number of tokens per sample (must be a multiple of chunk_size).')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size.')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
-    parser.add_argument('--learning_rate', type=float, default=1e-2, help='Learning rate.')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--chunk_size', type=int, default=64, help='Chunk size (to be safe, use powers of 2).')
     parser.add_argument('--n_embd', type=int, default=768, help='Embedding dimension.')
+    parser.add_argument('--T1_n_layers', type=int, default=6, help='Number of layers for the combining transformer.')
+    parser.add_argument('--T2_n_layers', type=int, default=6, help='Number of layers for the readout transformer.')
+    parser.add_argument('--n_heads', type=int, default=12, help='Number of heads for each transformer.')
     # parser.add_argument('--train_mode', type=str, default='parallel', choices=['parallel', 'blelloch', 'sequential'],
     #                     help='Training mode: parallel or sequential.')
     parser.add_argument('--vocab_size', type=int, default=8192, help='Vocabulary size.')
@@ -269,7 +252,9 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    output_dir = f"out/mqar_{args.seq_len}/tree_model_{args.n_embd}/tree_{timestamp}"
+    output_dir = f"out/mqar_{args.seq_len}/tree_model_{args.n_embd}/chunk_size_{args.chunk_size}/tree_{timestamp}"
+    print("Output directory:", output_dir)
+    print("Arguments:", args)
     os.makedirs(output_dir, exist_ok=True)
 
     train_dataset = AssociativeRecallDataset(
@@ -296,13 +281,13 @@ def main():
         dropout=0.1
     )
     model = TreeModel(config, chunk_size=args.chunk_size,
-                                 T1_num_layers=config.n_layer, T2_num_layers=config.n_layer) #, train_mode=args.train_mode
+                                 T1_num_layers=args.T1_n_layers, T2_num_layers=args.T2_n_layers) #, train_mode=args.train_mode
     model.to(device)
 
     training_args = TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy="steps",
-        eval_steps=100,
+        eval_strategy="steps",
+        eval_steps=5000,
         save_steps=500,
         logging_steps=100,
         per_device_train_batch_size=args.batch_size,
@@ -333,7 +318,25 @@ def main():
     trainer.remove_callback(ProgressCallback)
     
     trainer.train()
-    print(trainer.evaluate())
+    eval = trainer.evaluate()
+    args_dict = vars(args)
+    # Merge dictionaries
+    combined = {**args_dict, **eval}
+
+    path = os.path.join("results")
+    os.makedirs(path, exist_ok=True)
+    filename = f"results/output_s{args.seq_len}_n{args.n_embd}.csv"
+    file_exists = os.path.exists(filename)
+
+    # Append to CSV, write header only if file doesn't exist
+    with open(filename, "a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=combined.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(combined)
+
+    print("Out :", combined)
+    # csv_path = os.path.join(output_dir, "acc.csv")
 
 if __name__ == "__main__":
     main()
