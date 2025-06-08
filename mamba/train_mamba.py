@@ -198,7 +198,7 @@ def main():
         weight_decay=0.01,
         logging_dir='./logs',
         logging_steps=1,
-        eval_steps=100,
+        eval_steps=10,
         save_steps=100,
         save_total_limit=1,
         report_to="none" if args.disable_wandb else "wandb",
@@ -231,13 +231,13 @@ def main():
         pin_memory=False
     )
     
-    # Initialize trainer with custom data loaders
+    # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics,  # Pass compute_metrics directly
         data_collator=collate_fn,  # Use collate_fn directly as data_collator
     )
     
