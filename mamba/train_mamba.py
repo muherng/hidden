@@ -81,46 +81,45 @@ def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=N
     return loss
 
 def compute_metrics(eval_pred):
-    """Compute metrics for evaluation using direct supervision."""
-    logits, labels = eval_pred
-    
-    # Compute loss only on non-ignored tokens
-    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
-    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-    
-    # Compute error rate only on non-ignored tokens
-    predictions = torch.argmax(logits, dim=-1)
-    mask = labels != -100
-    num_errors = ((predictions != labels) & mask).sum().item()
-    total_tokens = mask.sum().item()
-    error_rate = num_errors / total_tokens if total_tokens > 0 else 1.0
-    
+    """Compute metrics for evaluation."""
+    logits = eval_pred.predictions["logits"]
+    labels = eval_pred.label_ids
+    preds = torch.argmax(torch.tensor(logits), dim=-1)
+    labels = torch.tensor(labels)
+
+    # Flatten if needed
+    if preds.ndim > 1:
+        preds = preds.view(-1)
+        labels = labels.view(-1)
+
+    mask = labels != -100  # Ignore padding or masked labels
+    correct = (preds[mask] == labels[mask]).sum().item()
+    total = mask.sum().item()
+    accuracy = correct / total if total > 0 else 0.0
     return {
-        "eval_loss": float(loss),
-        "eval_error_rate": float(error_rate),
-        "eval_num_errors": int(num_errors)
+        "eval_accuracy": accuracy,
     }
 
 def collate_fn(batch):
     """Collate function to properly format batches for training."""
-    print("\nCollate function:")
-    print(f"Batch size: {len(batch)}")
-    print(f"Batch type: {type(batch)}")
-    print(f"First item type: {type(batch[0])}")
-    print(f"First item keys: {list(batch[0].keys())}")
-    print(f"First item shapes: {[(k, v.shape) for k, v in batch[0].items()]}")
-    print(f"First item contents types: {[(k, type(v)) for k, v in batch[0].items()]}")
-    print(f"First item memory addresses: {[(k, id(v)) for k, v in batch[0].items()]}")
-    print(f"First item device: {[(k, v.device) for k, v in batch[0].items()]}")
-    print(f"First item requires_grad: {[(k, v.requires_grad) for k, v in batch[0].items()]}")
-    print(f"First item is_leaf: {[(k, v.is_leaf) for k, v in batch[0].items()]}")
-    print(f"First item grad_fn: {[(k, v.grad_fn) for k, v in batch[0].items()]}")
-    print(f"First item storage: {[(k, v.storage().data_ptr()) for k, v in batch[0].items()]}")
+    #print("\nCollate function:")
+    #print(f"Batch size: {len(batch)}")
+    #print(f"Batch type: {type(batch)}")
+    #print(f"First item type: {type(batch[0])}")
+    #print(f"First item keys: {list(batch[0].keys())}")
+    #print(f"First item shapes: {[(k, v.shape) for k, v in batch[0].items()]}")
+    #print(f"First item contents types: {[(k, type(v)) for k, v in batch[0].items()]}")
+    #print(f"First item memory addresses: {[(k, id(v)) for k, v in batch[0].items()]}")
+    #print(f"First item device: {[(k, v.device) for k, v in batch[0].items()]}")
+    #print(f"First item requires_grad: {[(k, v.requires_grad) for k, v in batch[0].items()]}")
+    #print(f"First item is_leaf: {[(k, v.is_leaf) for k, v in batch[0].items()]}")
+    #print(f"First item grad_fn: {[(k, v.grad_fn) for k, v in batch[0].items()]}")
+    #print(f"First item storage: {[(k, v.storage().data_ptr()) for k, v in batch[0].items()]}")
     
     try:
         input_ids = torch.stack([item["input_ids"] for item in batch])
         labels = torch.stack([item["labels"] for item in batch])
-        print(f"Stacked shapes - input_ids: {input_ids.shape}, labels: {labels.shape}")
+        #print(f"Stacked shapes - input_ids: {input_ids.shape}, labels: {labels.shape}")
         return {"input_ids": input_ids, "labels": labels}
     except KeyError as e:
         print(f"KeyError in collate_fn: {e}")
@@ -198,8 +197,9 @@ def main():
         warmup_steps=500,
         weight_decay=0.01,
         logging_dir='./logs',
-        logging_steps=10,
-        save_steps=500,
+        logging_steps=1,
+        eval_steps=100,
+        save_steps=100,
         save_total_limit=1,
         report_to="none" if args.disable_wandb else "wandb",
         bf16=args.use_bfloat16,

@@ -159,20 +159,10 @@ class AssociativeRecallDataset(Dataset):
         return self.inputs.size(0)
 
     def __getitem__(self, idx):
-        print(f"\nDataset __getitem__ for idx {idx}:")
-        print(f"Input shape: {self.inputs[idx].shape}")
-        print(f"Label shape: {self.labels[idx].shape}")
+        #print(f"\nDataset __getitem__ for idx {idx}:")
+        #print(f"Input shape: {self.inputs[idx].shape}")
+        #print(f"Label shape: {self.labels[idx].shape}")
         item = {"input_ids": self.inputs[idx], "labels": self.labels[idx]}
-        print(f"Returning item with keys: {list(item.keys())}")
-        print(f"Item contents: input_ids shape: {item['input_ids'].shape}, labels shape: {item['labels'].shape}")
-        print(f"Item type: {type(item)}")
-        print(f"Item contents types: {[(k, type(v)) for k, v in item.items()]}")
-        print(f"Item contents memory addresses: {[(k, id(v)) for k, v in item.items()]}")
-        print(f"Item contents device: {[(k, v.device) for k, v in item.items()]}")
-        print(f"Item contents requires_grad: {[(k, v.requires_grad) for k, v in item.items()]}")
-        print(f"Item contents is_leaf: {[(k, v.is_leaf) for k, v in item.items()]}")
-        print(f"Item contents grad_fn: {[(k, v.grad_fn) for k, v in item.items()]}")
-        print(f"Item contents storage: {[(k, v.storage().data_ptr()) for k, v in item.items()]}")
         return item
     
 
