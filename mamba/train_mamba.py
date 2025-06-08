@@ -61,50 +61,38 @@ def save_model_with_shared_tensors(model, output_dir, _internal_call=False):
 
 def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
     """
-    Custom loss computation for Mamba model
+    Custom loss computation for Mamba model using direct supervision for associative recall
     """
-    # Debug print to see what keys are available
-    print("\n=== Debug: Input Keys ===")
-    print("Available keys in inputs:", inputs.keys())
-    print("Input shapes:")
-    for key, value in inputs.items():
-        if isinstance(value, torch.Tensor):
-            print(f"{key}: {value.shape}")
-    
     # Get model outputs - Mamba only needs input_ids
     outputs = model(input_ids=inputs['input_ids'])
     
     # Get logits from the last hidden state
     logits = outputs.logits if hasattr(outputs, 'logits') else outputs
     
-    # For next token prediction, shift both logits and input_ids by one position
-    shift_logits = logits[..., :-1, :].contiguous()  # a b c d e -> a b c d
-    shift_labels = inputs['input_ids'][..., 1:].contiguous()  # a b c d e -> b c d e
+    # Use the actual labels from the dataset for direct supervision
+    labels = inputs['labels']
     
-    # Compute loss
-    loss_fct = torch.nn.CrossEntropyLoss()
-    loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1))
+    # Compute loss only on non-ignored tokens (where labels != -100)
+    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
     
     if return_outputs:
         return (loss, outputs)
     return loss
 
 def compute_metrics(eval_pred):
-    """Compute metrics for evaluation."""
+    """Compute metrics for evaluation using direct supervision."""
     logits, labels = eval_pred
     
-    # Shift logits and labels for next token prediction
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
+    # Compute loss only on non-ignored tokens
+    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
     
-    # Compute loss
-    loss_fct = torch.nn.CrossEntropyLoss()
-    loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1))
-    
-    # Compute error rate (percentage of incorrect predictions)
-    predictions = torch.argmax(shift_logits, dim=-1)
-    num_errors = (predictions != shift_labels).sum().item()
-    total_tokens = shift_labels.numel()
+    # Compute error rate only on non-ignored tokens
+    predictions = torch.argmax(logits, dim=-1)
+    mask = labels != -100
+    num_errors = ((predictions != labels) & mask).sum().item()
+    total_tokens = mask.sum().item()
     error_rate = num_errors / total_tokens if total_tokens > 0 else 1.0
     
     return {
