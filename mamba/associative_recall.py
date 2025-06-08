@@ -1,4 +1,3 @@
-
 import numpy as np
 import torch
 import os
@@ -129,12 +128,16 @@ class AssociativeRecallDataset(Dataset):
         """
         Dataset for the multi-query associative recall task.
         """
-        path = os.path.join("data", f"mqar_{input_seq_len}_seq_len_{num_examples}_examples_{vocab_size}_tokens_seed_{seed}_power_{power_a}_kv_{num_kv_pairs}")
+        # Use absolute path for data directory
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base_dir, "..", "data", f"mqar_{input_seq_len}_seq_len_{num_examples}_examples_{vocab_size}_tokens_seed_{seed}_power_{power_a}_kv_{num_kv_pairs}")
         file = os.path.join(path, "inputs.pt")
         if os.path.exists(file):
             print(f"Loading dataset from {path}")
             self.inputs = torch.load(os.path.join(path, "inputs.pt"))
             self.labels = torch.load(os.path.join(path, "labels.pt"))
+            print(f"Loaded inputs shape: {self.inputs.shape}")
+            print(f"Loaded labels shape: {self.labels.shape}")
         else:
             print(f"Generating dataset and saving to {path}")
             os.makedirs(path, exist_ok=True)
@@ -147,22 +150,30 @@ class AssociativeRecallDataset(Dataset):
                 num_kv_pairs=num_kv_pairs,
                 **kwargs
             )
+            print(f"Generated inputs shape: {self.inputs.shape}")
+            print(f"Generated labels shape: {self.labels.shape}")
             torch.save(self.inputs, os.path.join(path, "inputs.pt"))
             torch.save(self.labels, os.path.join(path, "labels.pt"))
-
-        # self.inputs, self.labels = multiquery_ar(
-        #     vocab_size=vocab_size,
-        #     num_examples=num_examples,
-        #     input_seq_len=input_seq_len,
-        #     seed=seed,
-        #     **kwargs
-        # )
 
     def __len__(self):
         return self.inputs.size(0)
 
     def __getitem__(self, idx):
-        return {"input_ids": self.inputs[idx], "labels": self.labels[idx]}
+        print(f"\nDataset __getitem__ for idx {idx}:")
+        print(f"Input shape: {self.inputs[idx].shape}")
+        print(f"Label shape: {self.labels[idx].shape}")
+        item = {"input_ids": self.inputs[idx], "labels": self.labels[idx]}
+        print(f"Returning item with keys: {list(item.keys())}")
+        print(f"Item contents: input_ids shape: {item['input_ids'].shape}, labels shape: {item['labels'].shape}")
+        print(f"Item type: {type(item)}")
+        print(f"Item contents types: {[(k, type(v)) for k, v in item.items()]}")
+        print(f"Item contents memory addresses: {[(k, id(v)) for k, v in item.items()]}")
+        print(f"Item contents device: {[(k, v.device) for k, v in item.items()]}")
+        print(f"Item contents requires_grad: {[(k, v.requires_grad) for k, v in item.items()]}")
+        print(f"Item contents is_leaf: {[(k, v.is_leaf) for k, v in item.items()]}")
+        print(f"Item contents grad_fn: {[(k, v.grad_fn) for k, v in item.items()]}")
+        print(f"Item contents storage: {[(k, v.storage().data_ptr()) for k, v in item.items()]}")
+        return item
     
 
 def multiquery_ar_offset(

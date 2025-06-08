@@ -101,6 +101,38 @@ def compute_metrics(eval_pred):
         "eval_num_errors": int(num_errors)
     }
 
+def collate_fn(batch):
+    """Collate function to properly format batches for training."""
+    print("\nCollate function:")
+    print(f"Batch size: {len(batch)}")
+    print(f"Batch type: {type(batch)}")
+    print(f"First item type: {type(batch[0])}")
+    print(f"First item keys: {list(batch[0].keys())}")
+    print(f"First item shapes: {[(k, v.shape) for k, v in batch[0].items()]}")
+    print(f"First item contents types: {[(k, type(v)) for k, v in batch[0].items()]}")
+    print(f"First item memory addresses: {[(k, id(v)) for k, v in batch[0].items()]}")
+    print(f"First item device: {[(k, v.device) for k, v in batch[0].items()]}")
+    print(f"First item requires_grad: {[(k, v.requires_grad) for k, v in batch[0].items()]}")
+    print(f"First item is_leaf: {[(k, v.is_leaf) for k, v in batch[0].items()]}")
+    print(f"First item grad_fn: {[(k, v.grad_fn) for k, v in batch[0].items()]}")
+    print(f"First item storage: {[(k, v.storage().data_ptr()) for k, v in batch[0].items()]}")
+    
+    try:
+        input_ids = torch.stack([item["input_ids"] for item in batch])
+        labels = torch.stack([item["labels"] for item in batch])
+        print(f"Stacked shapes - input_ids: {input_ids.shape}, labels: {labels.shape}")
+        return {"input_ids": input_ids, "labels": labels}
+    except KeyError as e:
+        print(f"KeyError in collate_fn: {e}")
+        print("Available keys in first item:", list(batch[0].keys()))
+        print("Full batch contents:")
+        for i, item in enumerate(batch):
+            print(f"Item {i}:")
+            print(f"  Keys: {list(item.keys())}")
+            print(f"  Types: {[(k, type(v)) for k, v in item.items()]}")
+            print(f"  Shapes: {[(k, v.shape) for k, v in item.items()]}")
+        raise
+
 def main():
     """Main function."""
     args = parse_arguments()
@@ -113,23 +145,28 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Load dataset
-    print("\n=== Loading Dataset ===")
-    dataset = AssociativeRecallDataset(
+    # Load datasets
+    print("\n=== Loading Datasets ===")
+    train_dataset = AssociativeRecallDataset(
         vocab_size=args.vocab_size,
         num_examples=args.num_examples,
         input_seq_len=args.input_seq_len,
         seed=args.seed,
-        num_kv_pairs=args.num_kv_pairs
+        num_kv_pairs=args.num_kv_pairs,
+        power_a=1.0  # Set to 1 for uniformly distributed gaps between keys and values
     )
     
-    # Split dataset into train and eval
-    train_size = int(0.9 * len(dataset))
-    eval_size = len(dataset) - train_size
-    train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+    valid_dataset = AssociativeRecallDataset(
+        vocab_size=args.vocab_size,
+        num_examples=args.num_examples // 10,  # Use 10% of training size for validation
+        input_seq_len=args.input_seq_len,
+        seed=args.seed + 10,  # Different seed for validation set
+        num_kv_pairs=args.num_kv_pairs,
+        power_a=1.0  # Set to 1 for uniformly distributed gaps between keys and values
+    )
     
     print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Eval dataset size: {len(eval_dataset)}")
+    print(f"Eval dataset size: {len(valid_dataset)}")
     
     # Initialize Mamba model
     model_name = "state-spaces/mamba-370m"
@@ -165,21 +202,48 @@ def main():
         save_steps=500,
         save_total_limit=1,
         report_to="none" if args.disable_wandb else "wandb",
-        dataloader_num_workers=1,
         bf16=args.use_bfloat16,
         max_grad_norm=1.0,
         seed=args.seed,
         data_seed=args.seed,
+        dataloader_num_workers=0,  # Disable multiprocessing to debug data loading
+        dataloader_pin_memory=False,  # Disable pin memory to debug data loading
     )
     
-    # Initialize trainer
+    # Create custom data loaders
+    from torch.utils.data import DataLoader
+    
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=0,
+        pin_memory=False
+    )
+    
+    eval_dataloader = DataLoader(
+        valid_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=0,
+        pin_memory=False
+    )
+    
+    # Initialize trainer with custom data loaders
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=valid_dataset,
         compute_metrics=compute_metrics,
+        data_collator=collate_fn,  # Use collate_fn directly as data_collator
     )
+    
+    # Override the trainer's get_train_dataloader and get_eval_dataloader methods
+    trainer.get_train_dataloader = lambda: train_dataloader
+    trainer.get_eval_dataloader = lambda: eval_dataloader
     
     # Add the custom compute_loss method to the trainer
     trainer.compute_loss = compute_loss.__get__(trainer)
