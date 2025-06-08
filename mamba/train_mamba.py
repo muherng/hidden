@@ -144,13 +144,13 @@ def main():
     print(f"Eval dataset size: {len(eval_dataset)}")
     
     # Initialize Mamba model
-    model_name = "state-spaces/mamba-130m"  # Using 130M parameter model
+    model_name = "state-spaces/mamba-370m"
     print(f"\nLoading model from {model_name}...")
     
-    config = MambaConfig(
+    config = CustomMambaConfig(
         vocab_size=args.vocab_size,
-        d_model=768,  # From mamba-130m config
-        n_layer=24,   # From mamba-130m config
+        d_model=2560,
+        n_layer=24,
         ssm_cfg={},
         rms_norm=True,
         residual_in_fp32=True,
