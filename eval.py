@@ -131,29 +131,25 @@ def entropy(x):
 #         dropout=0.1
 #     )
 
-# # Load the pre-trained TransformerScan model
-# model_path = "out/mqar_128/tree_model_128/tree_20250509_110213/checkpoint-200000" #tree_20250507_174245
-# model = TransformerScanModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=2, T2_num_layers=2, device=device) #, track_eranks=True
-# model.eval()
 
-# config = GPT2Config(
-#         vocab_size=8192, #tokenizer.vocab_size
-#         n_positions=1024,
-#         n_embd=384, #128,
-#         n_layer=4, #2, #6,
-#         n_head=6, #1, #12,
-#         dropout=0.1
-#     )
-# input_seq_len = 256 # 128 #
+config = GPT2Config(
+        vocab_size=8192, #tokenizer.vocab_size
+        n_positions=1024,
+        n_embd=128,
+        n_layer=2, #6,
+        n_head=1, #12,
+        dropout=0.1
+    )
+input_seq_len = 256 # 128 #
 
 chunk_size = 32 #256 # 16 # input_seq_len
 num_examples= 5
 num_kv_pairs = 4
 
 # Load the pre-trained TransformerScan model
-# model_path = "out/copy_128/tree_model_128/tree_20250513_161249/checkpoint-3125"
+model_path = "out/copy_128/tree_model_128/tree_20250513_161249/checkpoint-3125"
 # model_path = "out/copy_128/tree_model_128/trafo/tree_20250513_160344/checkpoint-3125" #tree_20250507_174245
-model_path = "out/mqar_128/tree_model_384/tree_20250514_163721/tree_20250514_163721/checkpoint-200000"
+# model_path = "out/mqar_128/tree_model_384/tree_20250514_163721/tree_20250514_163721/checkpoint-200000"
 # model_path = "out/mqar_128/tree_model_384/trafo_20250514_223812/tree_20250514_223812/checkpoint-200000" #tree_20250507_174245
 # model = TransformerScanModel.from_pretrained(model_path, config, chunk_size, T1_num_layers=config.n_layer, T2_num_layers=config.n_layer, device=device) #, track_eranks=True
 

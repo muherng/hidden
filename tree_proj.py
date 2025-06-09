@@ -8,10 +8,16 @@ import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 
 import numpy as np
+import csv
 
 from data.associative_recall import AssociativeRecallDataset
+
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+TOL = 1e-6  # Tolerance to determine if a tensor is the dummy
 
 from transformers import (
     GPT2LMHeadModel,
@@ -28,10 +34,6 @@ from transformers.modeling_outputs import CausalLMOutput
 
 from types import SimpleNamespace
 from typing import Optional
-
-timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-TOL = 1e-6  # Tolerance to determine if a tensor is the dummy
 
 # import matplotlib.pyplot as plt
 
@@ -179,6 +181,30 @@ class T1(nn.Module):
         x = self.project(x.transpose(-1,-2)).transpose(-1,-2)  # Project from 2*chunk_size to chunk_size
         return x
 
+# class Combine(nn.Module):
+#     """
+#     Combines two chunks by projecting from 2*chunk_size to chunk_size.
+#     """
+#     def __init__(self, config, num_layers=1):
+#         super().__init__()
+#         self.projection = nn.Linear(2 * config.chunk_size, config.chunk_size, bias=False)
+
+#     def forward(self, x, y):
+#         # If left is dummy, return right.
+#         if x[1]:
+#             return y
+#         # If right is dummy, return left.
+#         if y[1]:
+#             return x
+
+#         # Both are real: combine via T1.
+#         cat = torch.cat([x[0], y[0]], dim=1)  # shape: (batch, 2*chunk_size, hidden_dim)
+#         out = self.T1(cat)
+#         if isinstance(out, tuple):
+#             out = out[0]
+#         out = out[:, -self.chunk_size:, :]
+#         return (out, False)
+#         return x
     
 class T2(nn.Module):
     """
@@ -305,7 +331,7 @@ class TransformerScanModel(nn.Module):
                 "Assert failed: P[:,1,:,:] does not match level0[0][:,:self.chunk_size,:]"
             )
         
-        # loss_fn = nn.CrossEntropyLoss()
+        loss_fn = nn.CrossEntropyLoss()
         all_logits = []
         
         # --- Process chunk 0: standard autoregressive prediction ---
@@ -651,7 +677,8 @@ class TransformerScanModel(nn.Module):
         model.to(device)
         return model
 
-  
+# FINAL UNEMBEDDING LAYER?!
+
 class TreeModel(TransformerScanModel):
     """Tree model with direct output supervision."""
     
@@ -666,10 +693,15 @@ class TreeModel(TransformerScanModel):
         loss_fct = nn.CrossEntropyLoss()
 
         # final logits
+        # print("input_ids: " + str(input_ids.shape))
+        # print("labels: " + str(labels.shape))
         final_logits = outputs["logits"]
+        # print("final_logits: " + str(final_logits.shape))
         # compute loss
         if labels is not None:
             # compute loss
+            # print("final_logits view: " + str(final_logits.view(-1, self.config.vocab_size).shape))
+            # print("labels view: " + str(labels.view(-1).shape))
             loss = loss_fct(final_logits.view(-1, self.config.vocab_size), labels.view(-1))
             # outputs["loss"] = loss 
         return loss, outputs # 
@@ -699,6 +731,7 @@ def main():
     parser.add_argument('--num_train_examples', type=int, default=100000, help='Number of training examples.')
     parser.add_argument('--num_valid_examples', type=int, default=3000, help='Number of validation examples.')
     parser.add_argument('--num_kv_pairs', type=int, default=8, help='Number of key-value pairs.')
+    parser.add_argument('--power_a', type=float, default=0.1, help='Parameter for gap size in data distribution.')
     args = parser.parse_args()
 
     if args.seq_len % args.chunk_size != 0:
@@ -707,7 +740,7 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
-    output_dir = f"out/mqar_{args.seq_len}/tree_proj_{args.n_embd}/chunk_size_{args.chunk_size}/tree_{timestamp}"
+    output_dir = f"out/mqar_{args.seq_len}/tree_proj_{args.n_embd}/chunk_size_{args.chunk_size}/kv_{args.num_kv_pairs}/a_{args.power_a}/tree_{timestamp}"
     print("Output directory:", output_dir)
     print("Arguments:", args)
     os.makedirs(output_dir, exist_ok=True)
@@ -717,16 +750,16 @@ def main():
         num_examples=args.num_train_examples,
         input_seq_len=args.seq_len,
         num_kv_pairs=args.num_kv_pairs,
-        seed=args.seed,
-        power_a=1.0 # Set to 1 for uniformly distributed gaps between keys and values
+        power_a=args.power_a,
+        seed=args.seed
     )
     valid_dataset = AssociativeRecallDataset(
         vocab_size=args.vocab_size,
         num_examples=args.num_valid_examples,
         input_seq_len=args.seq_len,
         num_kv_pairs=args.num_kv_pairs,
-        seed=args.seed + 10,  # Different seed for validation set
-        power_a=1.0 # Set to 1 for uniformly distributed gaps between keys and values
+        power_a=args.power_a,
+        seed=args.seed + 10  # Different seed for validation set
     )
 
     config = GPT2Config(
@@ -776,23 +809,23 @@ def main():
     
     trainer.train()
     eval = trainer.evaluate()
-    # args_dict = vars(args)
-    # # Merge dictionaries
-    # combined = {**args_dict, **eval}
+    args_dict = vars(args)
+    # Merge dictionaries
+    combined = {**args_dict, **eval}
 
-    # path = os.path.join("results")
-    # os.makedirs(path, exist_ok=True)
-    # filename = f"results/output_s{args.seq_len}_n{args.n_embd}.csv"
-    # file_exists = os.path.exists(filename)
+    path = os.path.join("results", "proj")
+    os.makedirs(path, exist_ok=True)
+    filename = f"results/proj/output_s{args.seq_len}_n{args.n_embd}_a{args.power_a}.csv"
+    file_exists = os.path.exists(filename)
 
-    # # Append to CSV, write header only if file doesn't exist
-    # with open(filename, "a", newline="") as csvfile:
-    #     writer = csv.DictWriter(csvfile, fieldnames=combined.keys())
-    #     if not file_exists:
-    #         writer.writeheader()
-    #     writer.writerow(combined)
+    # Append to CSV, write header only if file doesn't exist
+    with open(filename, "a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=combined.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(combined)
 
-    print("Out :", eval)
+    print("Out :", combined)
     # csv_path = os.path.join(output_dir, "acc.csv")
 
 if __name__ == "__main__":
