@@ -9,6 +9,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     EarlyStoppingCallback,
+    TrainerCallback,
 )
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel, MambaConfig
 from associative_recall import AssociativeRecallDataset
@@ -27,6 +28,19 @@ class CustomMambaConfig(MambaConfig):
             "fused_add_norm": self.fused_add_norm,
             "pad_vocab_size_multiple": self.pad_vocab_size_multiple
         }
+
+class HelloWorldCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, **kwargs):
+        print("Hello World from on_step_end!")
+        # Get the trainer from kwargs
+        trainer = kwargs.get('trainer')
+        if trainer is None:
+            print("No trainer found in kwargs")
+            return
+            
+        # Run evaluation
+        metrics = trainer.evaluate()
+        print(f"Step {state.global_step} evaluation metrics:", metrics)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -242,6 +256,7 @@ def main():
         eval_dataset=valid_dataset,
         compute_metrics=compute_metrics,  # Pass compute_metrics directly
         data_collator=collate_fn,  # Use collate_fn directly as data_collator
+        callbacks=[HelloWorldCallback()],  # Add the callback here
     )
     
     # Override the trainer's get_train_dataloader and get_eval_dataloader methods
