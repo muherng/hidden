@@ -203,48 +203,22 @@ class PrintMetricsCallback(TrainerCallback):
         if logs is not None and "loss" in logs:
             print(f"Step {state.global_step}: loss = {logs['loss']:.4f}")
             
-            if state.global_step % 1 == 0:
+            if state.global_step % self.eval_steps == 0:
                 print(f"\n=== Evaluation at step {state.global_step} ===")
                 try:
-                    # Get model outputs for evaluation dataset
-                    self.trainer.model.eval()
-                    eval_dataloader = self.trainer.get_eval_dataloader()
-                    all_logits = []
-                    all_labels = []
-                    
-                    with torch.no_grad():
-                        for batch in eval_dataloader:
-                            # Move batch to the same device as the model
-                            batch = {k: v.to(self.trainer.model.device) if isinstance(v, torch.Tensor) else v 
-                                   for k, v in batch.items()}
-                            
-                            # Forward pass
-                            outputs = self.trainer.model(input_ids=batch['input_ids'])
-                            logits = outputs.logits
-                            
-                            all_logits.append(logits.cpu().numpy())
-                            all_labels.append(batch['labels'].cpu().numpy())
-                    
-                    # Concatenate all batches
-                    predictions = {"logits": np.concatenate(all_logits, axis=0)}
-                    labels = np.concatenate(all_labels, axis=0)
-                    
-                    # Call compute_metrics
-                    metrics = compute_metrics(type('obj', (object,), {
-                        'predictions': predictions,
-                        'label_ids': labels
-                    }))
+                    metrics = evaluate_model(
+                        self.trainer.model,
+                        self.trainer.eval_dataset,
+                        self.trainer.args.per_device_eval_batch_size,
+                        data_collator=self.trainer.data_collator
+                    )
                     print("Metrics:", metrics)
-                    
                 except Exception as e:
                     print(f"Error during evaluation: {e}")
                     print("Trainer state:", self.trainer is not None)
                     if self.trainer is not None:
                         print("Model state:", self.trainer.model is not None)
                         print("Eval dataset state:", self.trainer.eval_dataset is not None)
-                
-                finally:
-                    self.trainer.model.train()
 
 def main():
     """Main function."""
