@@ -594,6 +594,7 @@ class TransformerScanModel(nn.Module):
     @classmethod
     def from_pretrained(cls, checkpoint_path, config, chunk_size, device="cpu", **kwargs):
         # Instantiate the model on CPU first.
+        print(f"kwargs", kwargs)
         model = cls(config, chunk_size, **kwargs)
 
         # If checkpoint_path is a directory, locate the weight file.

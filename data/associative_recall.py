@@ -129,7 +129,7 @@ class AssociativeRecallDataset(Dataset):
         """
         Dataset for the multi-query associative recall task.
         """
-        path = os.path.join("data", f"mqar_{input_seq_len}_seq_len_{num_examples}_examples_{vocab_size}_tokens_seed_{seed}_power_{power_a}_kv_{num_kv_pairs}")
+        path = os.path.join("data", f"mqar_{input_seq_len}_{num_examples}_{vocab_size}_{seed}_power{power_a}_kv{num_kv_pairs}")
         file = os.path.join(path, "inputs.pt")
         if os.path.exists(file):
             print(f"Loading dataset from {path}")
