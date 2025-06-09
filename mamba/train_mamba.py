@@ -29,8 +29,61 @@ class CustomMambaConfig(MambaConfig):
             "pad_vocab_size_multiple": self.pad_vocab_size_multiple
         }
 
+def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
+    """Simple evaluation function that computes metrics on the eval dataset."""
+    model.eval()
+    total_loss = 0
+    total_errors = 0
+    total_tokens = 0
+    
+    # Get the device the model is on
+    device = next(model.parameters()).device
+    
+    # Create a simple dataloader with the data collator
+    eval_dataloader = torch.utils.data.DataLoader(
+        eval_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=data_collator if data_collator is not None else None
+    )
+    
+    with torch.no_grad():
+        for batch in eval_dataloader:
+            # Move batch to the same device as the model
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            
+            # Forward pass - Mamba only needs input_ids
+            outputs = model(input_ids=batch['input_ids'])
+            logits = outputs.logits
+            
+            # Shift logits and labels for next token prediction
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = batch['labels'][..., 1:].contiguous()
+            
+            # Compute loss
+            loss_fct = torch.nn.CrossEntropyLoss()
+            loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1))
+            total_loss += loss.item()
+            
+            # Compute error rate
+            predictions = torch.argmax(shift_logits, dim=-1)
+            num_errors = (predictions != shift_labels).sum().item()
+            total_errors += num_errors
+            total_tokens += shift_labels.numel()
+    
+    # Compute average metrics
+    avg_loss = total_loss / len(eval_dataloader)
+    error_rate = total_errors / total_tokens if total_tokens > 0 else 1.0
+    
+    model.train()
+    return {
+        "eval_loss": avg_loss,
+        "eval_error_rate": error_rate,
+        "eval_num_errors": total_errors
+    }
+
 class HelloWorldCallback(TrainerCallback):
-    def on_step_end(self, args, state, control, **kwargs):
+    def on_step_end(self, args, state, control, model=None, **kwargs):
         print("Hello World from on_step_end!")
         # Get the trainer from kwargs
         trainer = kwargs.get('trainer')
@@ -38,8 +91,13 @@ class HelloWorldCallback(TrainerCallback):
             print("No trainer found in kwargs")
             return
             
-        # Run evaluation
-        metrics = trainer.evaluate()
+        # Run evaluation using our evaluate_model function
+        metrics = evaluate_model(
+            trainer.model,
+            trainer.eval_dataset,
+            trainer.args.per_device_eval_batch_size,
+            data_collator=trainer.data_collator
+        )
         print(f"Step {state.global_step} evaluation metrics:", metrics)
 
 def parse_arguments():
@@ -119,24 +177,9 @@ def compute_metrics(eval_pred):
 
 def collate_fn(batch):
     """Collate function to properly format batches for training."""
-    #print("\nCollate function:")
-    #print(f"Batch size: {len(batch)}")
-    #print(f"Batch type: {type(batch)}")
-    #print(f"First item type: {type(batch[0])}")
-    #print(f"First item keys: {list(batch[0].keys())}")
-    #print(f"First item shapes: {[(k, v.shape) for k, v in batch[0].items()]}")
-    #print(f"First item contents types: {[(k, type(v)) for k, v in batch[0].items()]}")
-    #print(f"First item memory addresses: {[(k, id(v)) for k, v in batch[0].items()]}")
-    #print(f"First item device: {[(k, v.device) for k, v in batch[0].items()]}")
-    #print(f"First item requires_grad: {[(k, v.requires_grad) for k, v in batch[0].items()]}")
-    #print(f"First item is_leaf: {[(k, v.is_leaf) for k, v in batch[0].items()]}")
-    #print(f"First item grad_fn: {[(k, v.grad_fn) for k, v in batch[0].items()]}")
-    #print(f"First item storage: {[(k, v.storage().data_ptr()) for k, v in batch[0].items()]}")
-    
     try:
         input_ids = torch.stack([item["input_ids"] for item in batch])
         labels = torch.stack([item["labels"] for item in batch])
-        #print(f"Stacked shapes - input_ids: {input_ids.shape}, labels: {labels.shape}")
         return {"input_ids": input_ids, "labels": labels}
     except KeyError as e:
         print(f"KeyError in collate_fn: {e}")
@@ -148,6 +191,60 @@ def collate_fn(batch):
             print(f"  Types: {[(k, type(v)) for k, v in item.items()]}")
             print(f"  Shapes: {[(k, v.shape) for k, v in item.items()]}")
         raise
+
+class PrintMetricsCallback(TrainerCallback):
+    def __init__(self, trainer, eval_steps=100):
+        self.eval_steps = eval_steps
+        self.trainer = trainer
+        print("PrintMetricsCallback initialized with trainer")
+        
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Print training metrics and run evaluation periodically."""
+        if logs is not None and "loss" in logs:
+            print(f"Step {state.global_step}: loss = {logs['loss']:.4f}")
+            
+            if state.global_step % 1 == 0:
+                print(f"\n=== Evaluation at step {state.global_step} ===")
+                try:
+                    # Get model outputs for evaluation dataset
+                    self.trainer.model.eval()
+                    eval_dataloader = self.trainer.get_eval_dataloader()
+                    all_logits = []
+                    all_labels = []
+                    
+                    with torch.no_grad():
+                        for batch in eval_dataloader:
+                            # Move batch to the same device as the model
+                            batch = {k: v.to(self.trainer.model.device) if isinstance(v, torch.Tensor) else v 
+                                   for k, v in batch.items()}
+                            
+                            # Forward pass
+                            outputs = self.trainer.model(input_ids=batch['input_ids'])
+                            logits = outputs.logits
+                            
+                            all_logits.append(logits.cpu().numpy())
+                            all_labels.append(batch['labels'].cpu().numpy())
+                    
+                    # Concatenate all batches
+                    predictions = {"logits": np.concatenate(all_logits, axis=0)}
+                    labels = np.concatenate(all_labels, axis=0)
+                    
+                    # Call compute_metrics
+                    metrics = compute_metrics(type('obj', (object,), {
+                        'predictions': predictions,
+                        'label_ids': labels
+                    }))
+                    print("Metrics:", metrics)
+                    
+                except Exception as e:
+                    print(f"Error during evaluation: {e}")
+                    print("Trainer state:", self.trainer is not None)
+                    if self.trainer is not None:
+                        print("Model state:", self.trainer.model is not None)
+                        print("Eval dataset state:", self.trainer.eval_dataset is not None)
+                
+                finally:
+                    self.trainer.model.train()
 
 def main():
     """Main function."""
@@ -256,7 +353,7 @@ def main():
         eval_dataset=valid_dataset,
         compute_metrics=compute_metrics,  # Pass compute_metrics directly
         data_collator=collate_fn,  # Use collate_fn directly as data_collator
-        callbacks=[HelloWorldCallback()],  # Add the callback here
+        callbacks=[HelloWorldCallback()],  # Create callback without trainer
     )
     
     # Override the trainer's get_train_dataloader and get_eval_dataloader methods
@@ -265,6 +362,10 @@ def main():
     
     # Add the custom compute_loss method to the trainer
     trainer.compute_loss = compute_loss.__get__(trainer)
+
+    callback = PrintMetricsCallback(trainer=trainer, eval_steps=100)
+    trainer.add_callback(callback)
+    print("Callback added to trainer")
     
     # Override the save_model method
     original_save_model = trainer.save_model
