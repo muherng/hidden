@@ -245,8 +245,8 @@ def main():
     
     config = CustomMambaConfig(
         vocab_size=args.vocab_size,
-        d_model=2560,
-        n_layer=24,
+        d_model=128,
+        n_layer=2,
         ssm_cfg={},
         rms_norm=True,
         residual_in_fp32=True,
