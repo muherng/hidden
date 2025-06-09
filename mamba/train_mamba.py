@@ -213,15 +213,40 @@ def main():
         dataloader_pin_memory=False,  # Disable pin memory to debug data loading
     )
     
+    # Create custom data loaders
+    from torch.utils.data import DataLoader
+    
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=0,
+        pin_memory=False
+    )
+    
+    eval_dataloader = DataLoader(
+        valid_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=0,
+        pin_memory=False
+    )
+    
     # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics,  # Pass compute_metrics directly
         data_collator=collate_fn,  # Use collate_fn directly as data_collator
     )
+    
+    # Override the trainer's get_train_dataloader and get_eval_dataloader methods
+    trainer.get_train_dataloader = lambda: train_dataloader
+    trainer.get_eval_dataloader = lambda: eval_dataloader
     
     # Add the custom compute_loss method to the trainer
     trainer.compute_loss = compute_loss.__get__(trainer)
