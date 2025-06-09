@@ -33,7 +33,7 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
     """Simple evaluation function that computes metrics on the eval dataset."""
     model.eval()
     total_loss = 0
-    total_errors = 0
+    total_correct = 0
     total_tokens = 0
     
     # Get the device the model is on
@@ -65,47 +65,31 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
             loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1))
             total_loss += loss.item()
             
-            # Compute error rate
+            # Compute accuracy using the same logic as compute_metrics
             predictions = torch.argmax(shift_logits, dim=-1)
-            num_errors = (predictions != shift_labels).sum().item()
-            total_errors += num_errors
-            total_tokens += shift_labels.numel()
+            mask = shift_labels != -100  # Ignore padding or masked labels
+            correct = (predictions[mask] == shift_labels[mask]).sum().item()
+            total_correct += correct
+            total_tokens += mask.sum().item()
     
     # Compute average metrics
     avg_loss = total_loss / len(eval_dataloader)
-    error_rate = total_errors / total_tokens if total_tokens > 0 else 1.0
+    accuracy = total_correct / total_tokens if total_tokens > 0 else 0.0
     
     model.train()
     return {
         "eval_loss": avg_loss,
-        "eval_error_rate": error_rate,
-        "eval_num_errors": total_errors
+        "eval_accuracy": accuracy,
+        "eval_num_correct": total_correct,
+        "eval_total_tokens": total_tokens
     }
-
-class HelloWorldCallback(TrainerCallback):
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        print("Hello World from on_step_end!")
-        # Get the trainer from kwargs
-        trainer = kwargs.get('trainer')
-        if trainer is None:
-            print("No trainer found in kwargs")
-            return
-            
-        # Run evaluation using our evaluate_model function
-        metrics = evaluate_model(
-            trainer.model,
-            trainer.eval_dataset,
-            trainer.args.per_device_eval_batch_size,
-            data_collator=trainer.data_collator
-        )
-        print(f"Step {state.global_step} evaluation metrics:", metrics)
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="mamba_models")
     parser.add_argument("--vocab_size", type=int, default=8192)
-    parser.add_argument("--num_examples", type=int, default=1000)
+    parser.add_argument("--num_examples", type=int, default=100000)
     parser.add_argument("--input_seq_len", type=int, default=64)
     parser.add_argument("--num_kv_pairs", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=32)
@@ -201,7 +185,7 @@ class PrintMetricsCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Print training metrics and run evaluation periodically."""
         if logs is not None and "loss" in logs:
-            print(f"Step {state.global_step}: loss = {logs['loss']:.4f}")
+            #print(f"Step {state.global_step}: loss = {logs['loss']:.4f}")
             
             if state.global_step % self.eval_steps == 0:
                 print(f"\n=== Evaluation at step {state.global_step} ===")
@@ -245,7 +229,7 @@ def main():
     
     valid_dataset = AssociativeRecallDataset(
         vocab_size=args.vocab_size,
-        num_examples=args.num_examples // 10,  # Use 10% of training size for validation
+        num_examples=min(args.num_examples // 10,1000),  # Use 10% of training size for validation
         input_seq_len=args.input_seq_len,
         seed=args.seed + 10,  # Different seed for validation set
         num_kv_pairs=args.num_kv_pairs,
@@ -287,7 +271,7 @@ def main():
         logging_dir='./logs',
         logging_steps=1,
         eval_steps=10,
-        save_steps=100,
+        save_steps=500,
         save_total_limit=1,
         report_to="none" if args.disable_wandb else "wandb",
         bf16=args.use_bfloat16,
@@ -327,7 +311,6 @@ def main():
         eval_dataset=valid_dataset,
         compute_metrics=compute_metrics,  # Pass compute_metrics directly
         data_collator=collate_fn,  # Use collate_fn directly as data_collator
-        callbacks=[HelloWorldCallback()],  # Create callback without trainer
     )
     
     # Override the trainer's get_train_dataloader and get_eval_dataloader methods
