@@ -89,14 +89,16 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="mamba_models")
     parser.add_argument("--vocab_size", type=int, default=8192)
-    parser.add_argument("--num_examples", type=int, default=100000)
+    parser.add_argument("--num_examples", type=int, default=1000000)
     parser.add_argument("--input_seq_len", type=int, default=64)
     parser.add_argument("--num_kv_pairs", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--use_bfloat16", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_wandb", type=bool, default=False)
+    parser.add_argument("--hidden_dim", type=int, default=2048)
+    parser.add_argument("--eval_steps", type=int, default=100)
     return parser.parse_args()
 
 def save_model_with_shared_tensors(model, output_dir, _internal_call=False):
@@ -144,6 +146,25 @@ def compute_metrics(eval_pred):
     preds = torch.argmax(torch.tensor(logits), dim=-1)
     labels = torch.tensor(labels)
 
+    # Print predictions and labels for first example in batch
+    print("\nExample predictions and labels:")
+    print("Predictions shape:", preds.shape)
+    print("Labels shape:", labels.shape)
+    print("\nFirst example predictions:", preds[0].tolist())
+    print("First example labels:", labels[0].tolist())
+    
+    # Print where predictions match/don't match
+    matches = (preds[0] == labels[0])
+    print("\nPrediction matches (True) and mismatches (False):")
+    print(matches.tolist())
+    
+    # Print actual values where there are mismatches
+    mismatch_indices = torch.where(~matches)[0]
+    if len(mismatch_indices) > 0:
+        print("\nMismatches details:")
+        for idx in mismatch_indices:
+            print(f"Position {idx}: Predicted {preds[0][idx]}, Actual {labels[0][idx]}")
+
     # Flatten if needed
     if preds.ndim > 1:
         preds = preds.view(-1)
@@ -153,8 +174,8 @@ def compute_metrics(eval_pred):
     correct = (preds[mask] == labels[mask]).sum().item()
     total = mask.sum().item()
     accuracy = correct / total if total > 0 else 0.0
-    print(f"Accuracy: {accuracy}")
-    raise ValueError("Stop here")
+    print(f"\nOverall Accuracy: {accuracy}")
+    
     return {
         "eval_accuracy": accuracy,
     }
@@ -245,7 +266,7 @@ def main():
     
     config = CustomMambaConfig(
         vocab_size=args.vocab_size,
-        d_model=128,
+        d_model=args.hidden_dim,
         n_layer=2,
         ssm_cfg={},
         rms_norm=True,
@@ -269,7 +290,7 @@ def main():
         warmup_steps=500,
         weight_decay=0.01,
         logging_dir='./logs',
-        logging_steps=1,
+        logging_steps=10,
         eval_steps=10,
         save_steps=500,
         save_total_limit=1,
@@ -320,7 +341,7 @@ def main():
     # Add the custom compute_loss method to the trainer
     trainer.compute_loss = compute_loss.__get__(trainer)
 
-    callback = PrintMetricsCallback(trainer=trainer, eval_steps=100)
+    callback = PrintMetricsCallback(trainer=trainer, eval_steps=args.eval_steps)
     trainer.add_callback(callback)
     print("Callback added to trainer")
     
