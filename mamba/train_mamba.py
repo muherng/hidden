@@ -48,7 +48,7 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
     )
     
     with torch.no_grad():
-        for batch in eval_dataloader:
+        for batch_idx, batch in enumerate(eval_dataloader):
             # Move batch to the same device as the model
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
@@ -71,6 +71,30 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
             correct = (predictions[mask] == shift_labels[mask]).sum().item()
             total_correct += correct
             total_tokens += mask.sum().item()
+            
+            # Print detailed predictions for first batch only
+            if batch_idx == 0:
+                print("\n=== Example Predictions ===")
+                # Get first example from batch
+                example_preds = predictions[0].cpu().tolist()
+                example_labels = shift_labels[0].cpu().tolist()
+                example_mask = mask[0].cpu().tolist()
+                
+                print("\nPredictions:", example_preds)
+                print("Labels:", example_labels)
+                print("Mask (1=valid, 0=padding):", example_mask)
+                
+                # Show where predictions match/don't match
+                matches = [p == l for p, l, m in zip(example_preds, example_labels, example_mask) if m]
+                print("\nPrediction matches (True) and mismatches (False):", matches)
+                
+                # Show specific mismatches
+                mismatch_indices = [i for i, (p, l, m) in enumerate(zip(example_preds, example_labels, example_mask)) 
+                                 if m and p != l]
+                if mismatch_indices:
+                    print("\nMismatches details:")
+                    for idx in mismatch_indices:
+                        print(f"Position {idx}: Predicted {example_preds[idx]}, Actual {example_labels[idx]}")
     
     # Compute average metrics
     avg_loss = total_loss / len(eval_dataloader)
@@ -140,30 +164,10 @@ def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=N
 
 def compute_metrics(eval_pred):
     """Compute metrics for evaluation."""
-    print('BEING CALLED')
     logits = eval_pred.predictions["logits"]
     labels = eval_pred.label_ids
     preds = torch.argmax(torch.tensor(logits), dim=-1)
     labels = torch.tensor(labels)
-
-    # Print predictions and labels for first example in batch
-    print("\nExample predictions and labels:")
-    print("Predictions shape:", preds.shape)
-    print("Labels shape:", labels.shape)
-    print("\nFirst example predictions:", preds[0].tolist())
-    print("First example labels:", labels[0].tolist())
-    
-    # Print where predictions match/don't match
-    matches = (preds[0] == labels[0])
-    print("\nPrediction matches (True) and mismatches (False):")
-    print(matches.tolist())
-    
-    # Print actual values where there are mismatches
-    mismatch_indices = torch.where(~matches)[0]
-    if len(mismatch_indices) > 0:
-        print("\nMismatches details:")
-        for idx in mismatch_indices:
-            print(f"Position {idx}: Predicted {preds[0][idx]}, Actual {labels[0][idx]}")
 
     # Flatten if needed
     if preds.ndim > 1:
@@ -174,7 +178,6 @@ def compute_metrics(eval_pred):
     correct = (preds[mask] == labels[mask]).sum().item()
     total = mask.sum().item()
     accuracy = correct / total if total > 0 else 0.0
-    print(f"\nOverall Accuracy: {accuracy}")
     
     return {
         "eval_accuracy": accuracy,
