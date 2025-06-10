@@ -56,19 +56,15 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
             outputs = model(input_ids=batch['input_ids'])
             logits = outputs.logits
             
-            # Shift logits and labels for next token prediction
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = batch['labels'][..., 1:].contiguous()
-            
-            # Compute loss
-            loss_fct = torch.nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1))
+            # Compute loss directly without shifting
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(logits.view(-1, logits.size(-1)), batch['labels'].view(-1))
             total_loss += loss.item()
             
             # Compute accuracy using the same logic as compute_metrics
-            predictions = torch.argmax(shift_logits, dim=-1)
-            mask = shift_labels != -100  # Ignore padding or masked labels
-            correct = (predictions[mask] == shift_labels[mask]).sum().item()
+            predictions = torch.argmax(logits, dim=-1)
+            mask = batch['labels'] != -100  # Ignore padding or masked labels
+            correct = (predictions[mask] == batch['labels'][mask]).sum().item()
             total_correct += correct
             total_tokens += mask.sum().item()
             
@@ -76,12 +72,14 @@ def evaluate_model(model, eval_dataset, batch_size, data_collator=None):
             if batch_idx == 0:
                 print("\n=== Example Predictions ===")
                 # Get first example from batch
+                example_input = batch['input_ids'][0].cpu().tolist()
                 example_preds = predictions[0].cpu().tolist()
-                example_labels = shift_labels[0].cpu().tolist()
+                example_labels = batch['labels'][0].cpu().tolist()
                 example_mask = mask[0].cpu().tolist()
                 
-                print("\nPredictions:", example_preds)
-                print("Labels:", example_labels)
+                print("\nInput sequence:", example_input)
+                print("Predictions:", example_preds)
+                print("Expected solution:", example_labels)
                 print("Mask (1=valid, 0=padding):", example_mask)
                 
                 # Show where predictions match/don't match
