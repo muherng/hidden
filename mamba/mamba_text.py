@@ -9,6 +9,7 @@ from transformers import (
     GPT2TokenizerFast,
     Trainer,
     TrainingArguments,
+    TrainerCallback,
 )
 # Import base Mamba config and define a subclass that implements `to_dict`, which the
 # Hugging Face `Trainer` expects for logging integrations (e.g. WandB). Without this
@@ -80,10 +81,12 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Fine-tune Mamba on WikiText-103 for causal LM")
     parser.add_argument("--model_name", type=str, default="state-spaces/mamba-370m")
     parser.add_argument("--output_dir", type=str, default="mamba_wt103")
-    parser.add_argument("--context_length", type=int, default=1024)
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--context_length", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--warmup_steps", type=int, default=1000)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_bfloat16", action="store_true")
     parser.add_argument("--hidden_dim", type=int, default=512)
@@ -104,7 +107,7 @@ def main():
 
     # Load WikiText-103
     print("Loading WikiText-103 … (this may take a while)")
-    dataset = load_dataset("wikitext", "wikitext-103-v1")
+    dataset = load_dataset("wikitext", "wikitext-103-raw-v1")
 
     # Tokenize and chunk into blocks of context_length
     def tokenize_function(text_examples):
@@ -147,6 +150,15 @@ def main():
         dtype=torch.bfloat16 if args.use_bfloat16 else torch.float32,
     )
 
+    # Patch forward to ignore labels kwarg (Trainer passes it during evaluation)
+    original_forward = model.forward
+
+    def forward_no_labels(*f_args, **f_kwargs):
+        f_kwargs.pop("labels", None)
+        return original_forward(*f_args, **f_kwargs)
+
+    model.forward = forward_no_labels  # type: ignore[assignment]
+
     # Simple collate_fn that stacks tensors and omits attention_mask to avoid issues with Mamba
     def collate_fn(batch):
         input_ids = torch.stack([torch.tensor(item["input_ids"]) for item in batch])
@@ -156,18 +168,60 @@ def main():
             labels = input_ids.clone()
         return {"input_ids": input_ids, "labels": labels}
 
+    # ----------------- periodic evaluation callback ----------------------------
+
+    # -------- evaluation helper ---------------------------------------------------------
+
+    def compute_perplexity(model, dataset, batch_size):
+        model.eval()
+        device = next(model.parameters()).device
+        dl = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+        total_loss = 0
+        total_tokens = 0
+        loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="sum")
+        with torch.no_grad():
+            for batch in dl:
+                batch = {k: v.to(device) for k, v in batch.items()}
+                outputs = model(input_ids=batch["input_ids"])
+                logits = outputs.logits if hasattr(outputs, "logits") else outputs
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = batch["labels"][:, 1:].contiguous()
+                loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                total_loss += loss.item()
+                total_tokens += (shift_labels != -100).numel()
+        model.train()
+        avg_nll = total_loss / total_tokens
+        return torch.exp(torch.tensor(avg_nll)).item()
+
+    class PerplexityCallback(TrainerCallback):
+        """Evaluate model every `eval_steps` and print perplexity."""
+
+        def __init__(self, trainer_ref, eval_steps=1000):
+            self.trainer = trainer_ref
+            self.eval_steps = eval_steps
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step % self.eval_steps == 0 and state.global_step != 0:
+                ppl = compute_perplexity(self.trainer.model, self.trainer.eval_dataset, args.per_device_eval_batch_size)
+                print(f"\n=== Step {state.global_step}: validation perplexity={ppl:.3f} ===\n")
+
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         learning_rate=args.lr,
-        eval_steps=1000,
-        save_steps=1000,
-        logging_steps=50,
+        eval_steps=100,
+        save_steps=500,
+        logging_steps=100,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        lr_scheduler_type="cosine",
+        save_total_limit=2,
         report_to=[] if args.disable_wandb else ["wandb"],
         bf16=args.use_bfloat16,
         seed=args.seed,
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
@@ -178,6 +232,8 @@ def main():
         data_collator=collate_fn,
     )
 
+    trainer.add_callback(PerplexityCallback(trainer, eval_steps=1000))
+
     # override checkpoint saving to handle shared tensors
     trainer.save_model = lambda dir_path, _internal_call=False: save_model_with_shared_tensors(model, dir_path)
 
@@ -187,11 +243,8 @@ def main():
     print("Starting training …")
     trainer.train()
 
-    # evaluate perplexity on validation set
-    eval_metrics = trainer.evaluate()
-    if "eval_loss" in eval_metrics:
-        eval_metrics["perplexity"] = torch.exp(torch.tensor(eval_metrics["eval_loss"]))
-        print(f"Validation perplexity: {eval_metrics['perplexity']:.3f}")
+    final_ppl = compute_perplexity(model, eval_dataset, args.batch_size)
+    print(f"\nFinal validation perplexity: {final_ppl:.3f}")
 
     print("Saving model …")
     trainer.save_model(args.output_dir)
