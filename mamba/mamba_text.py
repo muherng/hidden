@@ -61,9 +61,14 @@ def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: 
     """Cross-entropy loss for causal LM without passing labels to model."""
     labels = inputs.pop("labels")
     outputs = model(input_ids=inputs["input_ids"])  # Mamba returns logits
-    logits = outputs.logits if hasattr(outputs, "logits") else outputs
+    logits = outputs.logits if hasattr(outputs, "logits") else outputs  # (B, L, V)
+
+    # Shift so that tokens < t predict token at t
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+
     loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
-    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
     if return_outputs:
         return (loss, outputs)
     return loss
