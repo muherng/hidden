@@ -32,6 +32,42 @@ class CustomMambaConfig(MambaConfig):
             "pad_vocab_size_multiple": self.pad_vocab_size_multiple,
         }
 
+    # Custom loss: call model with input_ids only, then compute xent against labels.
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(input_ids=inputs["input_ids"])  # logits
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs
+        loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        if return_outputs:
+            return (loss, outputs)
+        return loss
+
+# ----- utility to save model with shared tensors ------------------------------
+
+
+def save_model_with_shared_tensors(model: MambaLMHeadModel, output_dir: str):
+    """Save model avoiding safetensors shared-weight crash (embed/lm_head)."""
+    os.makedirs(output_dir, exist_ok=True)
+    torch.save(model.state_dict(), os.path.join(output_dir, "pytorch_model.bin"))
+
+    if hasattr(model, "config") and hasattr(model.config, "to_dict"):
+        with open(os.path.join(output_dir, "config.json"), "w") as f:
+            json.dump(model.config.to_dict(), f, indent=2)
+
+# ----- custom compute_loss for Trainer -------------------------------------------------
+
+def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: D401
+    """Cross-entropy loss for causal LM without passing labels to model."""
+    labels = inputs.pop("labels")
+    outputs = model(input_ids=inputs["input_ids"])  # Mamba returns logits
+    logits = outputs.logits if hasattr(outputs, "logits") else outputs
+    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+    if return_outputs:
+        return (loss, outputs)
+    return loss
+
 os.environ["HF_NO_CONVERT_SLOW_TOKENIZERS"] = "1"  # don't auto-convert slow tokenizer
 
 
@@ -137,8 +173,20 @@ def main():
         data_collator=collate_fn,
     )
 
+    # override checkpoint saving to handle shared tensors
+    trainer.save_model = lambda dir_path, _internal_call=False: save_model_with_shared_tensors(model, dir_path)
+
+    # override compute_loss
+    trainer.compute_loss = compute_loss.__get__(trainer)
+
     print("Starting training …")
     trainer.train()
+
+    # evaluate perplexity on validation set
+    eval_metrics = trainer.evaluate()
+    if "eval_loss" in eval_metrics:
+        eval_metrics["perplexity"] = torch.exp(torch.tensor(eval_metrics["eval_loss"]))
+        print(f"Validation perplexity: {eval_metrics['perplexity']:.3f}")
 
     print("Saving model …")
     trainer.save_model(args.output_dir)
