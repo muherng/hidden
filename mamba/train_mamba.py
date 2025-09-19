@@ -111,7 +111,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="mamba_models")
     parser.add_argument("--vocab_size", type=int, default=8192)
-    parser.add_argument("--num_examples", type=int, default=1000000)
+    parser.add_argument("--num_examples", type=int, default=1000)
     parser.add_argument("--input_seq_len", type=int, default=64)
     parser.add_argument("--num_kv_pairs", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=32)
