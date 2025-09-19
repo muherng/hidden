@@ -9,9 +9,28 @@ from transformers import (
     GPT2TokenizerFast,
     Trainer,
     TrainingArguments,
-    DataCollatorForLanguageModeling,
 )
+# Import base Mamba config and define a subclass that implements `to_dict`, which the
+# Hugging Face `Trainer` expects for logging integrations (e.g. WandB). Without this
+# method `Trainer` raises `AttributeError: 'MambaConfig' object has no attribute 'to_dict'`.
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel, MambaConfig
+
+
+class CustomMambaConfig(MambaConfig):
+    """Extend `MambaConfig` with a `to_dict` method for compatibility with HF Trainer."""
+
+    def to_dict(self):  # type: ignore[override]
+        """Return a serialisable representation of the config."""
+        return {
+            "vocab_size": self.vocab_size,
+            "d_model": self.d_model,
+            "n_layer": self.n_layer,
+            "ssm_cfg": self.ssm_cfg,
+            "rms_norm": self.rms_norm,
+            "residual_in_fp32": self.residual_in_fp32,
+            "fused_add_norm": self.fused_add_norm,
+            "pad_vocab_size_multiple": self.pad_vocab_size_multiple,
+        }
 
 os.environ["HF_NO_CONVERT_SLOW_TOKENIZERS"] = "1"  # don't auto-convert slow tokenizer
 
@@ -72,7 +91,7 @@ def main():
 
     # Build a fresh Mamba model from scratch
     print("Initializing Mamba model from scratch …")
-    config = MambaConfig(
+    config = CustomMambaConfig(
         vocab_size=len(tokenizer),
         d_model=args.hidden_dim,
         n_layer=8,
@@ -87,7 +106,14 @@ def main():
         dtype=torch.bfloat16 if args.use_bfloat16 else torch.float32,
     )
 
-    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    # Simple collate_fn that stacks tensors and omits attention_mask to avoid issues with Mamba
+    def collate_fn(batch):
+        input_ids = torch.stack([torch.tensor(item["input_ids"]) for item in batch])
+        if "labels" in batch[0]:
+            labels = torch.stack([torch.tensor(item["labels"]) for item in batch])
+        else:
+            labels = input_ids.clone()
+        return {"input_ids": input_ids, "labels": labels}
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -108,7 +134,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=data_collator,
+        data_collator=collate_fn,
     )
 
     print("Starting training …")
