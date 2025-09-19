@@ -133,22 +133,27 @@ def main():
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"]
 
-    # Build a fresh Mamba model from scratch
-    print("Initializing Mamba model from scratch …")
-    config = CustomMambaConfig(
-        vocab_size=len(tokenizer),
-        d_model=args.hidden_dim,
-        n_layer=8,
-        ssm_cfg={},
-        rms_norm=True,
-        residual_in_fp32=True,
-        fused_add_norm=True,
-    )
+    # Build model config – if user passes an existing HF checkpoint (e.g. mamba-130m),
+    # load its config then random-init weights. Otherwise use custom dimensions.
+    if args.model_name.startswith("state-spaces/mamba-"):
+        print(f"Loading architecture from {args.model_name} config … (weights will be random)" )
+        cfg = CustomMambaConfig.from_pretrained(args.model_name, trust_remote_code=True)
+        cfg.vocab_size = len(tokenizer)
+        config = cfg
+    else:
+        print("Initializing custom Mamba config …")
+        config = CustomMambaConfig(
+            vocab_size=len(tokenizer),
+            d_model=args.hidden_dim,
+            n_layer=8,
+            ssm_cfg={},
+            rms_norm=True,
+            residual_in_fp32=True,
+            fused_add_norm=True,
+        )
 
-    model = MambaLMHeadModel(
-        config=config,
-        dtype=torch.bfloat16 if args.use_bfloat16 else torch.float32,
-    )
+    model = MambaLMHeadModel(config=config,
+        dtype=torch.bfloat16 if args.use_bfloat16 else torch.float32)
 
     # Patch forward to ignore labels kwarg (Trainer passes it during evaluation)
     original_forward = model.forward
