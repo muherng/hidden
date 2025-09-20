@@ -80,7 +80,7 @@ os.environ["HF_NO_CONVERT_SLOW_TOKENIZERS"] = "1"  # don't auto-convert slow tok
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Fine-tune Mamba on WikiText-103 for causal LM")
     parser.add_argument("--model_name", type=str, default="state-spaces/mamba-370m")
-    parser.add_argument("--output_dir", type=str, default="mamba_wt103")
+    parser.add_argument("--output_dir", type=str, default="mamba_wt103_130m")
     parser.add_argument("--context_length", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=10)
