@@ -83,13 +83,14 @@ def parse_arguments():
     parser.add_argument("--output_dir", type=str, default="mamba_wt103")
     parser.add_argument("--context_length", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=1000)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_bfloat16", action="store_true")
-    parser.add_argument("--hidden_dim", type=int, default=512)
+    parser.add_argument("--hidden_dim", type=int, default=768)
+    parser.add_argument("--n_layers", type=int, default=12, help="Number of Mamba layers to approximate model size (12 => ~130M params)")
     parser.add_argument("--disable_wandb", action="store_true")
     return parser.parse_args()
 
@@ -135,22 +136,16 @@ def main():
 
     # Build model config – if user passes an existing HF checkpoint (e.g. mamba-130m),
     # load its config then random-init weights. Otherwise use custom dimensions.
-    if args.model_name.startswith("state-spaces/mamba-"):
-        print(f"Loading architecture from {args.model_name} config … (weights will be random)" )
-        cfg = CustomMambaConfig.from_pretrained(args.model_name, trust_remote_code=True)
-        cfg.vocab_size = len(tokenizer)
-        config = cfg
-    else:
-        print("Initializing custom Mamba config …")
-        config = CustomMambaConfig(
-            vocab_size=len(tokenizer),
-            d_model=args.hidden_dim,
-            n_layer=8,
-            ssm_cfg={},
-            rms_norm=True,
-            residual_in_fp32=True,
-            fused_add_norm=True,
-        )
+    print("Initializing custom Mamba config …")
+    config = CustomMambaConfig(
+        vocab_size=len(tokenizer),
+        d_model=args.hidden_dim,
+        n_layer=args.n_layers,
+        ssm_cfg={},
+        rms_norm=True,
+        residual_in_fp32=True,
+        fused_add_norm=True,
+    )
 
     model = MambaLMHeadModel(config=config,
         dtype=torch.bfloat16 if args.use_bfloat16 else torch.float32)
@@ -204,11 +199,20 @@ def main():
         def __init__(self, trainer_ref, eval_steps=1000):
             self.trainer = trainer_ref
             self.eval_steps = eval_steps
+            self.best_loss = float("inf")
 
         def on_step_end(self, args, state, control, **kwargs):
             if state.global_step % self.eval_steps == 0 and state.global_step != 0:
                 ppl = compute_perplexity(self.trainer.model, self.trainer.eval_dataset, args.per_device_eval_batch_size)
-                print(f"\n=== Step {state.global_step}: validation perplexity={ppl:.3f} ===\n")
+                nll = torch.log(torch.tensor(ppl))
+                print(f"\n=== Step {state.global_step}: val_nll={nll:.4f}, perplexity={ppl:.3f} ===\n")
+
+                # Save best model so far
+                if nll < self.best_loss:
+                    self.best_loss = nll
+                    best_dir = os.path.join(self.trainer.args.output_dir, "best")
+                    print(f"New best model (nll {nll:.4f}); saving to {best_dir}")
+                    self.trainer.save_model(best_dir)
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
