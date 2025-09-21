@@ -233,7 +233,17 @@ class T2(nn.Module):
         new_past = []
         for i, block in enumerate(self.blocks):
             past = None if past_key_values is None else past_key_values[i]
-            x, present = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
+            out = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
+            # GPT-2 block APIs have changed across transformers versions. They may return:
+            #   * (hidden_states, present, attn_weights)
+            #   * (hidden_states, present)
+            #   * just hidden_states
+            if isinstance(out, tuple):
+                x = out[0]
+                present = out[1] if len(out) > 1 else None
+            else:
+                x = out
+                present = None
             new_past.append(present)
         x = self.ln_f(x)
         return self.drop(x), tuple(new_past)
