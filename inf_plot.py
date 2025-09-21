@@ -34,6 +34,7 @@ def main():
         n_layer=4,
         n_head=4,
         dropout=0.1,
+        attn_implementation="eager",
     )
 
     raw = "\n".join(load_dataset("wikitext", "wikitext-2-raw-v1", split="test")["text"])
