@@ -43,7 +43,7 @@ def main():
     input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(device)
 
     # Initialize TransformerScanModel
-    model = TransformerScanModel(config=config, chunk_size=args.chunk_size, T1_num_layers=2, T2_num_layers=2)
+    model = TransformerScanModel(config=config, chunk_size=args.chunk_size, T1_num_layers=1, T2_num_layers=11)
     def init_weights(m):
         if isinstance(m, torch.nn.Linear):
             m.weight.data.normal_(0.0, config.initializer_range)
