@@ -20,6 +20,12 @@ def main():
     set_seed(args.seed)
     device = torch.device(args.device)
 
+    # Disable Flash / memory-efficient SDPA so attention cost grows with sequence length
+    if device.type == "cuda":
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)  # force math (O(L^2)) kernel
+
     prompt_capacity = args.npositions - args.max_new_tokens
     assert prompt_capacity > 0
 
@@ -27,15 +33,13 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.model_max_length = args.npositions
 
-    config = GPT2Config(
-        vocab_size=tokenizer.vocab_size,
-        n_positions=args.npositions,
-        n_embd=256,
-        n_layer=4,
-        n_head=4,
-        dropout=0.1,
-        attn_implementation="eager",
-    )
+    # Use the standard GPT-2 (124 M params) config – much larger than the toy model
+    config = GPT2Config.from_pretrained("gpt2")
+    # Extend context length to match experiment
+    config.n_positions = args.npositions
+    config.n_ctx = args.npositions
+    config.attn_implementation = "eager"
+    config._attn_implementation = "eager"
 
     raw = "\n".join(load_dataset("wikitext", "wikitext-2-raw-v1", split="test")["text"])
     tokens = tokenizer(raw, return_tensors="pt", add_special_tokens=False, truncation=True,
@@ -43,7 +47,7 @@ def main():
     input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(device)
 
     # Initialize TransformerScanModel
-    model = TransformerScanModel(config=config, chunk_size=args.chunk_size, T1_num_layers=1, T2_num_layers=11)
+    model = TransformerScanModel(config=config, chunk_size=args.chunk_size, T1_num_layers=2, T2_num_layers=2)
     def init_weights(m):
         if isinstance(m, torch.nn.Linear):
             m.weight.data.normal_(0.0, config.initializer_range)
@@ -63,13 +67,22 @@ def main():
 
     with torch.no_grad():
         for i in range(args.max_new_tokens):
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+
             t0 = time.time()
             next_logits, L, chunks_processed, prefix_val, past_key_values = model.forward_inference(
                 input_ids, L, chunks_processed, prefix_val, past_key_values=past_key_values
             )
+
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+
             scan_times.append(time.time() - t0)
+
             next_token = next_logits.argmax(dim=-1, keepdim=True)
             input_ids = torch.cat([input_ids, next_token], dim=1)
+
             if i % 1000 == 0:
                 print(f"Scan model token {i}")
 
@@ -82,12 +95,23 @@ def main():
 
     with torch.no_grad():
         for i in range(args.max_new_tokens):
+            # Ensure previous GPU work is finished before starting timing
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+
             t0 = time.time()
             outputs = vanilla(input_ids[:, -1:], past_key_values=past)
+
+            # Wait for the kernels launched by this forward pass to complete
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+
             vanilla_times.append(time.time() - t0)
+
             past = outputs.past_key_values
             next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
             input_ids = torch.cat([input_ids, next_token], dim=1)
+
             if i % 1000 == 0:
                 print(f"Vanilla model token {i}")
 
@@ -95,8 +119,11 @@ def main():
 
     # Plotting
     plt.figure()
-    plt.plot(range(len(scan_times)), scan_times, label="TransformerScanModel")
-    plt.plot(range(len(vanilla_times)), vanilla_times, label="Vanilla GPT-2")
+    start_idx = 100  # skip the first 100 tokens
+    if len(scan_times) > start_idx:
+        plt.plot(range(start_idx, len(scan_times)), scan_times[start_idx:], label="TransformerScanModel")
+    if len(vanilla_times) > start_idx:
+        plt.plot(range(start_idx, len(vanilla_times)), vanilla_times[start_idx:], label="Vanilla GPT-2")
     plt.xlabel("Token index")
     plt.ylabel("Time per token (s)")
     plt.title("Inference Speed vs Generation Length")
