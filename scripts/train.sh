@@ -63,4 +63,8 @@ export PYTHONPATH=$PYTHONPATH:/data/vision/torralba/selfmanaged/isola/projects/s
 cd /data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden
 
 # Run your Python script
-python tree_model6.py -s -c scripts/train.yaml
+#with slurm 
+#python models/tree_model6.py -s -c scripts/train.yaml
+
+#without slurm in interactive mode 
+python models/tree_model6.py -c scripts/train.yaml
