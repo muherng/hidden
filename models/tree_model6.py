@@ -739,6 +739,11 @@ def main(args):
         config = GPT2Config.from_pretrained("gpt2-large")
         config.vocab_size = tokenizer.vocab_size
 
+    if getattr(config, "attn_implementation", None) is None:
+        config.attn_implementation = "eager"
+    if getattr(config, "_attn_implementation", None) is None:
+        config._attn_implementation = "eager"
+
     print("=> Model config:", config)
 
     if args.model_type == 'tree':
@@ -757,7 +762,7 @@ def main(args):
 
     training_args = TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=100,
         save_steps=500,
         logging_steps=100,
