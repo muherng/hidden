@@ -13,7 +13,6 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import wandb
 from transformers.integrations import WandbCallback
-import sys
 import yaml
 from itertools import product
 
@@ -38,7 +37,7 @@ from transformers.modeling_outputs import CausalLMOutput
 import datasets
 from types import SimpleNamespace
 from typing import Optional
-from blelloch_scan import BlellochScan
+from models.blelloch_scan import BlellochScan
 import matplotlib.pyplot as plt
 
 def count_params(model):
