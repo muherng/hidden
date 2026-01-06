@@ -1,3 +1,4 @@
+import gc
 import torch
 import time
 import argparse
@@ -89,7 +90,8 @@ def main():
     print(f"TransformerScanModel average time/token: {sum(scan_times)/len(scan_times):.6f}s")
 
     # Free memory from the first experiment before loading vanilla GPT-2
-    del model, L, prefix_val, past_key_values
+    del model, L, prefix_val, past_key_values, input_ids
+    gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
