@@ -104,14 +104,30 @@ def main():
     input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(device)
     print(f"[DEBUG] input_ids shape: {input_ids.shape}", flush=True)
 
-    # Vanilla GPT-2 with native n_positions=1024
-    # We clamp position_ids to [0, 1023] but let KV cache grow to 40k entries
-    # This demonstrates the O(L) per-token slowdown from growing KV cache
+    # Vanilla GPT-2: Create with n_positions=1024 to avoid OOM from large buffers,
+    # then manually resize the causal mask buffers in each attention layer.
+    # Position embeddings stay at 1024 entries; we clamp position_ids during generation.
     print("[DEBUG] Creating GPT2LMHeadModel on CPU...", flush=True)
     vanilla_config = GPT2Config.from_pretrained("gpt2")
     vanilla_config.attn_implementation = "eager"
     vanilla_config._attn_implementation = "eager"
+    max_pos_embed = vanilla_config.n_positions  # Save original (1024) for position_ids clamping
     vanilla = GPT2LMHeadModel(vanilla_config)
+    
+    # Resize the causal mask (bias buffer) in each attention layer to handle 40k tokens
+    # This buffer is created during __init__ with size 1024x1024; we need to expand it
+    print("[DEBUG] Resizing attention bias buffers...", flush=True)
+    new_max_pos = args.npositions
+    new_bias = torch.tril(torch.ones((new_max_pos, new_max_pos), dtype=torch.bool)).view(
+        1, 1, new_max_pos, new_max_pos
+    )
+    for block in vanilla.transformer.h:
+        block.attn.bias = new_bias
+    
+    # Update config for consistency
+    vanilla_config.n_positions = args.npositions
+    vanilla_config.n_ctx = args.npositions
+    
     print("[DEBUG] Moving GPT2LMHeadModel to device...", flush=True)
     vanilla = vanilla.to(device)
     print("[DEBUG] Setting to eval mode...", flush=True)
@@ -129,9 +145,9 @@ def main():
             if device.type == "cuda":
                 torch.cuda.synchronize()
 
-            # Clamp position_id to max 1023 (GPT-2's native limit)
-            # KV cache still grows, showing the slowdown
-            cur_pos = min(seq_len + i, vanilla_config.n_positions - 1)
+            # Clamp position_id to max 1023 (position embedding limit)
+            # KV cache still grows to 40k, showing the slowdown
+            cur_pos = min(seq_len + i, max_pos_embed - 1)
             position_ids = torch.tensor([[cur_pos]], device=device)
 
             if i == 0:
