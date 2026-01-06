@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 from transformers import GPT2Tokenizer, set_seed, GPT2Config, GPT2LMHeadModel
 from datasets import load_dataset
-from tree_model6 import TransformerScanModel
+from models.tree_model6 import TransformerScanModel
 
 def main():
     parser = argparse.ArgumentParser()
@@ -87,6 +87,14 @@ def main():
                 print(f"Scan model token {i}")
 
     print(f"TransformerScanModel average time/token: {sum(scan_times)/len(scan_times):.6f}s")
+
+    # Free memory from the first experiment before loading vanilla GPT-2
+    del model, L, prefix_val, past_key_values
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    # Reset input_ids to the original prompt for a fair comparison
+    input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(device)
 
     # Vanilla GPT‑2
     vanilla = GPT2LMHeadModel(config).to(device).eval()
