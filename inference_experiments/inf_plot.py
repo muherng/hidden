@@ -16,6 +16,8 @@ def main():
     parser.add_argument("--chunk_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--vanilla_device", type=str, default="cpu",
+                        help="Device for vanilla GPT-2 (use 'cpu' to observe linear KV cache latency)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -128,39 +130,54 @@ def main():
     vanilla_config.n_positions = args.npositions
     vanilla_config.n_ctx = args.npositions
     
-    print("[DEBUG] Moving GPT2LMHeadModel to device...", flush=True)
-    vanilla = vanilla.to(device)
+    # Run vanilla GPT-2 on specified device (default: CPU to observe linear KV cache latency)
+    vanilla_device = torch.device(args.vanilla_device)
+    print(f"[DEBUG] Moving GPT2LMHeadModel to {vanilla_device}...", flush=True)
+    vanilla = vanilla.to(vanilla_device)
+    # Also move the bias tensors (they were assigned as attributes, not registered buffers)
+    for block in vanilla.transformer.h:
+        block.attn.bias = block.attn.bias.to(vanilla_device)
     print("[DEBUG] Setting to eval mode...", flush=True)
     vanilla = vanilla.eval()
     print("[DEBUG] GPT2LMHeadModel ready", flush=True)
     vanilla_times = []
-    past = None
 
-    # Track current sequence position for position_ids clamping
+    # Reset input_ids for vanilla on its device
+    input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(vanilla_device)
     seq_len = input_ids.shape[1]
+
+    # PREFILL: Process full prompt first to build initial KV cache
+    # This makes comparison with TransformerScanModel fair (both start with same context)
+    print(f"[DEBUG] Prefill: processing {seq_len} prompt tokens...", flush=True)
+    with torch.no_grad():
+        # Clamp position_ids for full prompt
+        position_ids = torch.arange(seq_len, device=vanilla_device).unsqueeze(0)
+        position_ids = position_ids.clamp(max=max_pos_embed - 1)
+        outputs = vanilla(input_ids, position_ids=position_ids, use_cache=True)
+        past = outputs.past_key_values
+    print(f"[DEBUG] Prefill complete, KV cache has {seq_len} entries", flush=True)
+
+    # DECODE: Generate tokens one at a time, measuring latency
+    # With KV cache, each token requires O(L) attention where L grows linearly
+    # On GPU with small batch, this may be hidden by overhead. Try:
+    #   --batch_size 32 (more work per attention op)
+    #   --vanilla_device cpu (removes GPU parallelism)
 
     with torch.no_grad():
         for i in range(args.max_new_tokens):
-            # Ensure previous GPU work is finished before starting timing
-            if device.type == "cuda":
+            # Clamp position_id to max 1023 (position embedding limit)
+            cur_pos = min(seq_len + i, max_pos_embed - 1)
+            position_ids = torch.tensor([[cur_pos]], device=vanilla_device).expand(args.batch_size, -1)
+
+            if vanilla_device.type == "cuda":
                 torch.cuda.synchronize()
 
-            # Clamp position_id to max 1023 (position embedding limit)
-            # KV cache still grows to 40k, showing the slowdown
-            cur_pos = min(seq_len + i, max_pos_embed - 1)
-            position_ids = torch.tensor([[cur_pos]], device=device)
-
-            if i == 0:
-                print("[DEBUG] Starting first forward pass...", flush=True)
             t0 = time.time()
             outputs = vanilla(input_ids[:, -1:], past_key_values=past, position_ids=position_ids)
-            if i == 0:
-                print("[DEBUG] First forward pass complete", flush=True)
-
-            # Wait for the kernels launched by this forward pass to complete
-            if device.type == "cuda":
+            
+            if vanilla_device.type == "cuda":
                 torch.cuda.synchronize()
-
+            
             vanilla_times.append(time.time() - t0)
 
             past = outputs.past_key_values
@@ -168,7 +185,7 @@ def main():
             input_ids = torch.cat([input_ids, next_token], dim=1)
 
             if i % 1000 == 0:
-                print(f"Vanilla model token {i}")
+                print(f"Vanilla model token {i}, seq_len={seq_len + i}")
 
     print(f"Vanilla GPT-2 average time/token: {sum(vanilla_times)/len(vanilla_times):.6f}s")
 
