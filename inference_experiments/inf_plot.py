@@ -87,21 +87,41 @@ def main():
             if i % 1000 == 0:
                 print(f"Scan model token {i}")
 
-    print(f"TransformerScanModel average time/token: {sum(scan_times)/len(scan_times):.6f}s")
+    print(f"TransformerScanModel average time/token: {sum(scan_times)/len(scan_times):.6f}s", flush=True)
 
     # Free memory from the first experiment before loading vanilla GPT-2
+    print("[DEBUG] Deleting scan model variables...", flush=True)
     del model, L, prefix_val, past_key_values, input_ids
+    print("[DEBUG] Running gc.collect()...", flush=True)
     gc.collect()
     if device.type == "cuda":
+        print(f"[DEBUG] GPU memory before empty_cache: {torch.cuda.memory_allocated()/1e9:.2f} GB", flush=True)
         torch.cuda.empty_cache()
+        print(f"[DEBUG] GPU memory after empty_cache: {torch.cuda.memory_allocated()/1e9:.2f} GB", flush=True)
 
     # Reset input_ids to the original prompt for a fair comparison
+    print("[DEBUG] Creating input_ids...", flush=True)
     input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(device)
+    print(f"[DEBUG] input_ids shape: {input_ids.shape}", flush=True)
 
-    # Vanilla GPT‑2
-    vanilla = GPT2LMHeadModel(config).to(device).eval()
+    # Vanilla GPT-2 with native n_positions=1024
+    # We clamp position_ids to [0, 1023] but let KV cache grow to 40k entries
+    # This demonstrates the O(L) per-token slowdown from growing KV cache
+    print("[DEBUG] Creating GPT2LMHeadModel on CPU...", flush=True)
+    vanilla_config = GPT2Config.from_pretrained("gpt2")
+    vanilla_config.attn_implementation = "eager"
+    vanilla_config._attn_implementation = "eager"
+    vanilla = GPT2LMHeadModel(vanilla_config)
+    print("[DEBUG] Moving GPT2LMHeadModel to device...", flush=True)
+    vanilla = vanilla.to(device)
+    print("[DEBUG] Setting to eval mode...", flush=True)
+    vanilla = vanilla.eval()
+    print("[DEBUG] GPT2LMHeadModel ready", flush=True)
     vanilla_times = []
     past = None
+
+    # Track current sequence position for position_ids clamping
+    seq_len = input_ids.shape[1]
 
     with torch.no_grad():
         for i in range(args.max_new_tokens):
@@ -109,8 +129,17 @@ def main():
             if device.type == "cuda":
                 torch.cuda.synchronize()
 
+            # Clamp position_id to max 1023 (GPT-2's native limit)
+            # KV cache still grows, showing the slowdown
+            cur_pos = min(seq_len + i, vanilla_config.n_positions - 1)
+            position_ids = torch.tensor([[cur_pos]], device=device)
+
+            if i == 0:
+                print("[DEBUG] Starting first forward pass...", flush=True)
             t0 = time.time()
-            outputs = vanilla(input_ids[:, -1:], past_key_values=past)
+            outputs = vanilla(input_ids[:, -1:], past_key_values=past, position_ids=position_ids)
+            if i == 0:
+                print("[DEBUG] First forward pass complete", flush=True)
 
             # Wait for the kernels launched by this forward pass to complete
             if device.type == "cuda":
