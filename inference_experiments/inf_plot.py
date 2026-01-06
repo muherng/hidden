@@ -141,32 +141,22 @@ def main():
     vanilla = vanilla.eval()
     print("[DEBUG] GPT2LMHeadModel ready", flush=True)
     vanilla_times = []
+    past = None
 
-    # Reset input_ids for vanilla on its device
-    input_ids = tokens.unsqueeze(0).repeat(args.batch_size, 1).to(vanilla_device)
-    seq_len = input_ids.shape[1]
+    # Use a SHORT prompt for vanilla GPT-2 so KV cache grows from small to large
+    # This clearly demonstrates linear O(L) growth in per-token latency
+    vanilla_prompt_len = 100
+    input_ids = tokens[:vanilla_prompt_len].unsqueeze(0).repeat(args.batch_size, 1).to(vanilla_device)
+    print(f"[DEBUG] Vanilla starting with {vanilla_prompt_len} token prompt, will generate {args.max_new_tokens} tokens", flush=True)
 
-    # PREFILL: Process full prompt first to build initial KV cache
-    # This makes comparison with TransformerScanModel fair (both start with same context)
-    print(f"[DEBUG] Prefill: processing {seq_len} prompt tokens...", flush=True)
-    with torch.no_grad():
-        # Clamp position_ids for full prompt
-        position_ids = torch.arange(seq_len, device=vanilla_device).unsqueeze(0)
-        position_ids = position_ids.clamp(max=max_pos_embed - 1)
-        outputs = vanilla(input_ids, position_ids=position_ids, use_cache=True)
-        past = outputs.past_key_values
-    print(f"[DEBUG] Prefill complete, KV cache has {seq_len} entries", flush=True)
-
-    # DECODE: Generate tokens one at a time, measuring latency
-    # With KV cache, each token requires O(L) attention where L grows linearly
-    # On GPU with small batch, this may be hidden by overhead. Try:
-    #   --batch_size 32 (more work per attention op)
-    #   --vanilla_device cpu (removes GPU parallelism)
+    # Generate tokens one at a time, measuring latency as KV cache grows
+    # With batch_size > 1 on GPU, the linear O(L) growth becomes visible
 
     with torch.no_grad():
         for i in range(args.max_new_tokens):
+            seq_len = input_ids.shape[1]
             # Clamp position_id to max 1023 (position embedding limit)
-            cur_pos = min(seq_len + i, max_pos_embed - 1)
+            cur_pos = min(seq_len - 1, max_pos_embed - 1)
             position_ids = torch.tensor([[cur_pos]], device=vanilla_device).expand(args.batch_size, -1)
 
             if vanilla_device.type == "cuda":
@@ -185,7 +175,7 @@ def main():
             input_ids = torch.cat([input_ids, next_token], dim=1)
 
             if i % 1000 == 0:
-                print(f"Vanilla model token {i}, seq_len={seq_len + i}")
+                print(f"Vanilla model token {i}, KV cache size={seq_len}")
 
     print(f"Vanilla GPT-2 average time/token: {sum(vanilla_times)/len(vanilla_times):.6f}s")
 
