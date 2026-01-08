@@ -101,7 +101,7 @@ NGPU=1 bash train.sh \
   --training.seed 42 \
   --checkpoint.interval 5000 \
   --checkpoint.load_step -1 \
-  --checkpoint.keep_latest_k 3 \
+  --checkpoint.keep_latest_k 0 \  # 0 = keep ALL checkpoints
   --metrics.log_freq 100 \
   --metrics.enable_wandb
 
