@@ -75,6 +75,18 @@ models:
   # ------------------------------------------
   # Gated DeltaNet
   # ------------------------------------------
+  gated_deltanet_170M:
+    name: "Gated-DeltaNet-170M"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M.json
+    description: "170M parameter Gated DeltaNet model (comparable to TransformerScanModel)"
+    # Training params matched to TransformerScanModel in train.yaml
+    batch_size: 64
+    seq_len: 512
+    learning_rate: 1.0e-4
+    warmup_steps: 1000
+    weight_decay: 0.01
+  
   gated_deltanet_340M:
     name: "Gated-DeltaNet-340M"
     model_type: gated_deltanet
