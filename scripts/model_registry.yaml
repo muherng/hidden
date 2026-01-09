@@ -1,0 +1,214 @@
+# ============================================
+# Model Registry for Comparison Experiments
+# ============================================
+# This file defines all comparison models and their configurations.
+# To add a new model, simply add a new entry under 'models'.
+#
+# Each model entry requires:
+#   - name: Human-readable name
+#   - model_type: Type used by flame framework (e.g., gla, gated_deltanet, etc.)
+#   - config: Path to model config JSON (relative to flame/)
+#   - description: Brief description
+#
+# Optional overrides for training parameters:
+#   - batch_size, seq_len, learning_rate, etc.
+# ============================================
+
+# Default training parameters (matched to TransformerScanModel in train.yaml)
+defaults:
+  # Dataset
+  dataset: wikitext
+  dataset_name: wikitext-103-raw-v1
+  
+  # Training hyperparameters (matched to TransformerScanModel)
+  batch_size: 64
+  seq_len: 512
+  learning_rate: 1.0e-4
+  warmup_steps: 1000
+  weight_decay: 0.01
+  lr_decay_type: cosine
+  max_norm: 1.0
+  
+  # Total training (20 epochs over WikiText-103)
+  # WikiText-103: ~103M tokens
+  # tokens_per_step = batch_size * seq_len = 64 * 512 = 32,768
+  # steps = 20 * 103M / 32,768 ≈ 62,900
+  total_steps: 62900
+  
+  # Checkpointing & logging
+  checkpoint_interval: 5000
+  keep_latest_k: 0  # 0 = keep ALL checkpoints
+  log_freq: 100
+  enable_wandb: true
+  
+  # Tokenizer
+  tokenizer: gpt2
+  
+  # Infrastructure
+  num_workers: 8
+  prefetch_factor: 2
+  seed: 42
+  gradient_accumulation_steps: 1
+  skip_nan_inf: true
+
+
+# Registered models for comparison
+models:
+  # ------------------------------------------
+  # Gated Linear Attention (GLA)
+  # ------------------------------------------
+  gla_170M:
+    name: "GLA-170M"
+    model_type: gla
+    config: configs/gla_170M.json
+    description: "170M parameter Gated Linear Attention model"
+    # Uses all defaults
+  
+  gla_340M:
+    name: "GLA-340M"
+    model_type: gla
+    config: configs/gla_340M.json
+    description: "340M parameter Gated Linear Attention model"
+    # Override for larger model
+    batch_size: 32
+  
+  # ------------------------------------------
+  # Gated DeltaNet
+  # ------------------------------------------
+  gated_deltanet_340M:
+    name: "Gated-DeltaNet-340M"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_340M.json
+    description: "340M parameter Gated DeltaNet model"
+    batch_size: 32
+  
+  gated_deltanet_1B:
+    name: "Gated-DeltaNet-1B"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_1B.json
+    description: "1B parameter Gated DeltaNet model"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # DeltaNet
+  # ------------------------------------------
+  delta_net_340M:
+    name: "DeltaNet-340M"
+    model_type: delta_net
+    config: configs/delta_net_340M.json
+    description: "340M parameter DeltaNet model"
+    batch_size: 32
+  
+  delta_net_1B:
+    name: "DeltaNet-1B"
+    model_type: delta_net
+    config: configs/delta_net_1B.json
+    description: "1B parameter DeltaNet model"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # Mamba
+  # ------------------------------------------
+  mamba_340M:
+    name: "Mamba-340M"
+    model_type: mamba
+    config: configs/mamba_340M.json
+    description: "340M parameter Mamba model"
+    batch_size: 32
+  
+  mamba_1B:
+    name: "Mamba-1B"
+    model_type: mamba
+    config: configs/mamba_1B.json
+    description: "1B parameter Mamba model"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # Mamba2
+  # ------------------------------------------
+  mamba2_340M:
+    name: "Mamba2-340M"
+    model_type: mamba2
+    config: configs/mamba2_340M.json
+    description: "340M parameter Mamba2 model"
+    batch_size: 32
+  
+  mamba2_1B:
+    name: "Mamba2-1B"
+    model_type: mamba2
+    config: configs/mamba2_1B.json
+    description: "1B parameter Mamba2 model"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # Transformer (baseline)
+  # ------------------------------------------
+  transformer_340M:
+    name: "Transformer-340M"
+    model_type: transformer
+    config: configs/transformer_340M.json
+    description: "340M parameter Transformer baseline"
+    batch_size: 32
+  
+  transformer_1B:
+    name: "Transformer-1B"
+    model_type: transformer
+    config: configs/transformer_1B.json
+    description: "1B parameter Transformer baseline"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # GSA (Gated Slot Attention)
+  # ------------------------------------------
+  gsa_340M:
+    name: "GSA-340M"
+    model_type: gsa
+    config: configs/gsa_340M.json
+    description: "340M parameter Gated Slot Attention model"
+    batch_size: 32
+  
+  gsa_1B:
+    name: "GSA-1B"
+    model_type: gsa
+    config: configs/gsa_1B.json
+    description: "1B parameter Gated Slot Attention model"
+    batch_size: 16
+  
+  # ------------------------------------------
+  # HGRN2
+  # ------------------------------------------
+  hgrn2_340M:
+    name: "HGRN2-340M"
+    model_type: hgrn2
+    config: configs/hgrn2_340M.json
+    description: "340M parameter HGRN2 model"
+    batch_size: 32
+
+
+# ============================================
+# SLURM settings for different cluster setups
+# ============================================
+slurm_profiles:
+  lingo:
+    account: lingo
+    partition: lingo-h100
+    qos: lingo-main
+    time: "24:00:00"
+    gpus: 1
+    cpus_per_task: 16
+    mem: "64G"
+    conda_env: fla2
+    conda_source: /data/lingo/morrisyau/miniforge3/etc/profile.d/conda.sh
+    working_dir: /data/lingo/morrisyau/hidden/flame
+  
+  vision:
+    account: vision-phillipi
+    partition: vision-phillipi
+    qos: vision-phillipi-main
+    time: "96:00:00"
+    gpus: 1
+    cpus_per_task: 15
+    mem: "16G"
+    conda_env: multimae
+    conda_source: /data/scratch/sharut/anaconda3/etc/profile.d/conda.sh
+    working_dir: /data/lingo/morrisyau/hidden/flame
