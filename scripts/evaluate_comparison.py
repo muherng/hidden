@@ -408,6 +408,7 @@ def plot_results(experiments, output_path):
     plt.xlabel('Step')
     plt.ylabel('Validation Perplexity')
     plt.title('Validation Perplexity')
+    plt.ylim(0, 50)
     plt.legend()
     plt.grid(True, alpha=0.3)
     
