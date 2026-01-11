@@ -39,3 +39,15 @@ Thumbs.db
 wandb/
 
 data/
+
+# Flame exclusions (large/generated files)
+flame/exp/
+flame/logs/
+flame/wandb/
+flame/build/
+flame/dist/
+flame/*.egg-info/
+flame/**/*.pt
+flame/**/*.pkl
+flame/**/*.safetensors
+flame/slurm_scripts/
