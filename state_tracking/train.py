@@ -53,7 +53,7 @@ def parse_arguments():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data_determinism", action="store_true", default=False)
     parser.add_argument("--full_determinism", action="store_true", default=False)
-    parser.add_argument("--early_stopping", action="store_true", default=True)
+    parser.add_argument("--early_stopping", action=argparse.BooleanOptionalAction, default=True, help="Enable/disable early stopping (use --no-early_stopping to disable)")
     parser.add_argument("--is_parity_cur", action="store_true", default=False)
     parser.add_argument("--disable_wandb", action="store_true", default=False)
     parser.add_argument("--debug", action="store_true", default=False)
@@ -236,7 +236,7 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
         save_total_limit=2,  # Keep only the last 2 checkpoints
         logging_dir='./logs',
         logging_steps=100,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=100,
         batch_eval_metrics=True,
         remove_unused_columns=False,
@@ -254,7 +254,7 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
     )
     
     print("\n=== Training Arguments ===")
-    print(f"Evaluation strategy: {training_args.evaluation_strategy}")
+    print(f"Evaluation strategy: {training_args.eval_strategy}")
     print(f"Evaluation steps: {training_args.eval_steps}")
     print(f"Batch eval metrics: {training_args.batch_eval_metrics}")
     print(f"Output directory: {args.output_dir}")
