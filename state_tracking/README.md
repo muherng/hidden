@@ -58,6 +58,84 @@ Optional arguments:
 
 This script will save model checkpoints to `<output_dir>/checkpoint-<num_steps>/`. In subsequent sections, this should be fed in as `checkpoint_dir`.
 
+## Train Tree Model with Curriculum Learning
+
+The Tree Model uses a binary tree aggregation structure for efficient parallel training. To train with curriculum learning (progressively increasing sequence lengths), follow this procedure:
+
+### Basic Training Command
+
+Run from the `hidden` root directory:
+```bash
+python -m state_tracking.train \
+    --model tree \
+    --num_items 5 \
+    --max_len 2 \
+    --chunk_size 1 \
+    --num_stories 100000 \
+    --epochs 10 \
+    --batch_size 32 \
+    --no-early_stopping \
+    --generate_dataset \
+    --disable_wandb
+```
+
+### Curriculum Learning: Length 2 → 18
+
+Train on progressively longer sequences, using the checkpoint from each length to initialize training on the next length:
+
+**Step 1: Train on length 2**
+```bash
+python -m state_tracking.train \
+    --model tree --num_items 5 --max_len 2 --chunk_size 1 \
+    --num_stories 100000 --epochs 10 --batch_size 32 \
+    --no-early_stopping --generate_dataset --disable_wandb
+```
+
+**Step 2: Train on length 3 (initialized from length 2 checkpoint)**
+```bash
+python -m state_tracking.train \
+    --model tree --num_items 5 --max_len 3 --chunk_size 1 \
+    --num_stories 100000 --epochs 10 --batch_size 32 \
+    --from_checkpoint 2 \
+    --no-early_stopping --generate_dataset --disable_wandb
+```
+
+**Step 3-17: Continue the pattern**
+
+For each length `L` from 4 to 18:
+```bash
+python -m state_tracking.train \
+    --model tree --num_items 5 --max_len L --chunk_size 1 \
+    --num_stories 100000 --epochs 10 --batch_size 32 \
+    --from_checkpoint <L-1> \
+    --no-early_stopping --generate_dataset --disable_wandb
+```
+
+The `--from_checkpoint` argument takes the previous max_len value and automatically finds the latest checkpoint from that training run.
+
+### Evaluating Length Generalization
+
+After curriculum training up to length 18, evaluate on longer sequences to test length generalization:
+
+```bash
+python -m state_tracking.train \
+    --model tree --num_items 5 --max_len 18 --chunk_size 1 \
+    --from_checkpoint 18 \
+    --eval_lengths \
+    --disable_wandb
+```
+
+This will evaluate the trained model on sequences longer than the training length (e.g., 18, 26, 34, ...) and generate plots showing generalization performance.
+
+### Key Arguments for Tree Model
+
+- `--model tree`: Use the Tree Model architecture
+- `--chunk_size`: Number of tokens per chunk (use 1 for finest granularity)
+- `--T1_num_layers`: Number of layers in aggregation module (default: 1)
+- `--T2_num_layers`: Number of layers in prediction module (default: 1)
+- `--from_checkpoint <max_len>`: Initialize from checkpoint trained on specified max_len
+- `--eval_lengths`: Skip training, only evaluate on multiple sequence lengths
+
 ## Test
 To generate plots of generalization accuracy across sequence lengths (section 4.4), run:
 ```bash

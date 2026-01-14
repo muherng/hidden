@@ -92,7 +92,8 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                 n_embd=768,
                 n_layer=6, #this is overridden by T1_num_layers and T2_num_layers
                 n_head=12,
-                dropout=0.1
+                dropout=0.1,
+                attn_implementation="eager"
             )
             print('chunk size: ', chunk_size)
             if checkpoint_path is not None: 
@@ -164,6 +165,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     return_dict=True,
                     output_hidden_states=True,
                     output_attentions=True,
+                    attn_implementation="eager",
                 )
                 model = GPT2LMHeadModel(config)
                 # Modify the forward pass
@@ -324,6 +326,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                 return_dict=True,
                 output_hidden_states=True,
                 output_attentions=True,
+                attn_implementation="eager",
             )
             print("Config details:\n", json.dumps(config.to_dict(), indent=2))
             model = GPT2LMHeadModel(config)
@@ -385,6 +388,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     return_dict=True,
                     output_hidden_states=True,
                     output_attentions=True,
+                    attn_implementation="eager",
                 )
                 model = GPT2LMHeadModel(config)
                 # Modify the forward pass
@@ -441,6 +445,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     return_dict=True,
                     output_hidden_states=True,
                     output_attentions=True,
+                    attn_implementation="eager",
                 )
                 model = GPT2LMHeadModel(config)
                 # Modify the forward pass

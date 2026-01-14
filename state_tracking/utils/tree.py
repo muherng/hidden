@@ -175,7 +175,9 @@ class T2(nn.Module):
         new_past = []
         for i, block in enumerate(self.blocks):
             past = None if past_key_values is None else past_key_values[i]
-            x, present = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
+            outputs = block(x, attention_mask=causal_mask, use_cache=True, output_attentions=False, layer_past=past)
+            x = outputs[0]
+            present = outputs[1] if len(outputs) > 1 else None
             new_past.append(present)
         
         x = self.ln_f(x)
@@ -662,7 +664,8 @@ def main():
         n_embd=768,
         n_layer=6,
         n_head=12,
-        dropout=0.1
+        dropout=0.1,
+        attn_implementation="eager"
     )
     model = TransformerScanModel(config, chunk_size=args.chunk_size,
                                  T1_num_layers=6, T2_num_layers=6)
@@ -670,7 +673,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=100,
         save_steps=500,
         logging_steps=100,
