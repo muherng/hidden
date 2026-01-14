@@ -9,9 +9,9 @@ from transformers import (
 )
 from nnsight import LanguageModel
 from torch.nn import LogSoftmax
-from permutation_task import compute_parity, PermutationTask
+from state_tracking.permutation_task import compute_parity, PermutationTask
 import torch
-from interpret.visualization_manager import VisualizationManager
+from state_tracking.interpret.visualization_manager import VisualizationManager
 import random
 import os
 from tqdm import tqdm

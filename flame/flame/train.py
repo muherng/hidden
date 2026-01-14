@@ -36,6 +36,7 @@ from flame.data import build_dataloader, build_dataset
 from flame.models.parallelize_fla import parallelize_fla
 from flame.models.pipeline_fla import pipeline_fla
 from flame.tools.utils import get_nparams_and_flops
+from flame.utils.dropout import add_dropout_to_model
 
 
 def build_tokenizer(job_config: JobConfig) -> AutoTokenizer:
@@ -280,6 +281,10 @@ def main(job_config: JobConfig):
         with torch.no_grad():
             model.post_init()
         model.train()
+
+        # Apply dropout if configured (adds forward hooks to attention and MLP layers)
+        if job_config.training.dropout > 0:
+            add_dropout_to_model(model, dropout_rate=job_config.training.dropout)
 
         model_parts = [model]
 

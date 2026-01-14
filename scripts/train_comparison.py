@@ -95,6 +95,7 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--optimizer.name AdamW',
         f'--optimizer.eps 1e-8',
         f'--optimizer.lr {config["learning_rate"]}',
+        f'--optimizer.weight_decay {config["weight_decay"]}',
         f'--lr_scheduler.warmup_steps {config["warmup_steps"]}',
         f'--lr_scheduler.lr_min 0.0',
         f'--lr_scheduler.decay_type {config["lr_decay_type"]}',
@@ -109,6 +110,7 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--training.num_workers {config["num_workers"]}',
         f'--training.prefetch_factor {config["prefetch_factor"]}',
         f'--training.seed {config["seed"]}',
+        f'--training.dropout {config.get("dropout", 0.0)}',
         f'--checkpoint.interval {config["checkpoint_interval"]}',
         f'--checkpoint.load_step -1',
         f'--checkpoint.keep_latest_k {config["keep_latest_k"]}',
@@ -124,17 +126,20 @@ def generate_train_command(config, exp_name, flame_dir):
     return ' \\\n  '.join(cmd_parts)
 
 
-def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir):
+def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override=None):
     """Generate a complete SLURM script."""
     registry = load_registry()
     slurm_config = registry["slurm_profiles"].get(slurm_profile, registry["slurm_profiles"]["lingo"])
+    
+    # Allow partition override from command line
+    partition = partition_override if partition_override else slurm_config["partition"]
     
     train_cmd = generate_train_command(config, exp_name, flame_dir)
     
     script = f'''#!/bin/bash
 #SBATCH --job-name={model_id}-wiki103
 #SBATCH --account={slurm_config["account"]}
-#SBATCH --partition={slurm_config["partition"]}
+#SBATCH --partition={partition}
 #SBATCH --qos={slurm_config["qos"]}
 #SBATCH --time={slurm_config["time"]}
 #SBATCH --output={flame_dir}/logs/{model_id}_%j.log
@@ -207,9 +212,9 @@ def run_training(config, model_id, exp_name, flame_dir, dry_run=False):
     subprocess.run(train_cmd, shell=True, check=True)
 
 
-def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_run=False):
+def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_run=False, partition_override=None):
     """Submit a SLURM job."""
-    script = generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir)
+    script = generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override)
     
     # Create temp directory for SLURM scripts
     slurm_dir = Path(flame_dir) / "slurm_scripts"
@@ -267,7 +272,10 @@ Examples:
     parser.add_argument("--list", action="store_true", help="List all available models")
     parser.add_argument("--exp_name", type=str, default=None, help="Custom experiment name")
     parser.add_argument("--submit", action="store_true", help="Submit as SLURM job")
-    parser.add_argument("--slurm_profile", type=str, default="lingo", help="SLURM profile to use")
+    parser.add_argument("--slurm_profile", type=str, default="lingo", 
+                       help="SLURM profile to use (lingo, vision, vision_h100)")
+    parser.add_argument("--partition", type=str, default=None,
+                       help="Override SLURM partition (e.g., vision-shared-h100)")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
     parser.add_argument("--flame_dir", type=str, default=None, help="Path to flame directory")
     
@@ -318,7 +326,8 @@ Examples:
     if args.submit:
         submit_slurm_job(
             config, args.model, exp_name, 
-            args.slurm_profile, flame_dir, args.dry_run
+            args.slurm_profile, flame_dir, args.dry_run,
+            partition_override=args.partition
         )
     else:
         run_training(config, args.model, exp_name, flame_dir, args.dry_run)

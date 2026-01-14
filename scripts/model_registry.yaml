@@ -26,6 +26,7 @@ defaults:
   learning_rate: 1.0e-4
   warmup_steps: 1000
   weight_decay: 0.01
+  dropout: 0.1  # Dropout rate for attention and MLP (matches GPT2 default)
   lr_decay_type: cosine
   max_norm: 1.0
   
@@ -221,6 +222,21 @@ slurm_profiles:
     gpus: 1
     cpus_per_task: 15
     mem: "16G"
+    conda_env: fla2
+    conda_source: /data/lingo/morrisyau/miniforge3/etc/profile.d/conda.sh
+    working_dir: /data/lingo/morrisyau/hidden/flame
+  
+  vision_h100:
+    account: lingo
+    partition: vision-shared-h100
+    qos: shared-if-available
+    time: "24:00:00"
+    gpus: 1
+    cpus_per_task: 16
+    mem: "64G"
+    conda_env: fla2
+    conda_source: /data/lingo/morrisyau/miniforge3/etc/profile.d/conda.sh
+    working_dir: /data/lingo/morrisyau/hidden/flame
     conda_env: multimae
     conda_source: /data/scratch/sharut/anaconda3/etc/profile.d/conda.sh
     working_dir: /data/lingo/morrisyau/hidden/flame

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import random
 from glob import glob
 from tqdm import tqdm
-from permutation_task import PermutationTask
+from state_tracking.permutation_task import PermutationTask
 import os
 import json
 import argparse

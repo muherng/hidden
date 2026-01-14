@@ -2,8 +2,8 @@ import numpy as np
 import random
 from tqdm import tqdm
 from typing import Set, Dict, List, Tuple, Any
-from permutation_task import compute_parity
-from interpret.interpreters.base_interpreter import BaseInterpreter
+from state_tracking.permutation_task import compute_parity
+from state_tracking.interpret.interpreters.base_interpreter import BaseInterpreter
 import torch
 import os
 

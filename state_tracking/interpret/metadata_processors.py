@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from permutation_task import compute_parity
+from state_tracking.permutation_task import compute_parity
 
 
 class MetadataProcessor:

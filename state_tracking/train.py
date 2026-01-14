@@ -14,16 +14,16 @@ from transformers import (
     EarlyStoppingCallback,
 )
 
-from utils.data_loaders import (
+from state_tracking.utils.data_loaders import (
     ChunkedDataset,
 )
-from utils.data_collators import (
+from state_tracking.utils.data_collators import (
     DataCollatorForLanguageModelingWithNextTokenSupervision,
     DataCollatorForLanguageModelingWithDirectSupervision
 )
 
-from permutation_task import PermutationTask, compute_parity
-from utils.model_utils import setup_tokenizer, setup_model
+from state_tracking.permutation_task import PermutationTask, compute_parity
+from state_tracking.utils.model_utils import setup_tokenizer, setup_model
 
 from transformers import TrainerCallback
 from typing import Dict

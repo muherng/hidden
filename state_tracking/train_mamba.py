@@ -14,13 +14,13 @@ from transformers import (
     TrainerCallback,
 )
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel, MambaConfig
-from utils.data_loaders import ChunkedDataset
-from utils.data_collators import (
+from state_tracking.utils.data_loaders import ChunkedDataset
+from state_tracking.utils.data_collators import (
     DataCollatorForLanguageModelingWithNextTokenSupervision,
     DataCollatorForLanguageModelingWithDirectSupervision
 )
-from permutation_task import PermutationTask, compute_parity
-from utils.model_utils import setup_tokenizer
+from state_tracking.permutation_task import PermutationTask, compute_parity
+from state_tracking.utils.model_utils import setup_tokenizer
 import torch.nn as nn
 
 def parse_arguments():
