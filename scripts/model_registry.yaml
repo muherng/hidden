@@ -14,19 +14,19 @@
 #   - batch_size, seq_len, learning_rate, etc.
 # ============================================
 
-# Default training parameters (matched to TransformerScanModel in train.yaml)
+# Default training parameters (flame defaults with dropout)
 defaults:
   # Dataset
   dataset: wikitext
   dataset_name: wikitext-103-raw-v1
   
-  # Training hyperparameters (matched to TransformerScanModel)
+  # Training hyperparameters (flame defaults)
   batch_size: 64
   seq_len: 512
-  learning_rate: 1.0e-4
-  warmup_steps: 1000
+  learning_rate: 1.0e-3  # flame default (was 1e-4)
+  warmup_steps: 1000     # flame uses 1024, close enough
   weight_decay: 0.01
-  dropout: 0.1  # Dropout rate for attention and MLP (matches GPT2 default)
+  dropout: 0.1           # Added for regularization (not in flame default)
   lr_decay_type: cosine
   max_norm: 1.0
   
@@ -80,13 +80,8 @@ models:
     name: "Gated-DeltaNet-170M"
     model_type: gated_deltanet
     config: configs/gated_deltanet_170M.json
-    description: "170M parameter Gated DeltaNet model (comparable to TransformerScanModel)"
-    # Training params matched to TransformerScanModel in train.yaml
-    batch_size: 64
-    seq_len: 512
-    learning_rate: 1.0e-4
-    warmup_steps: 1000
-    weight_decay: 0.01
+    description: "170M parameter Gated DeltaNet model"
+    # Uses flame defaults (lr=1e-3, etc.)
   
   gated_deltanet_340M:
     name: "Gated-DeltaNet-340M"

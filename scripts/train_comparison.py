@@ -93,11 +93,11 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--model.config "{config["config"]}"',
         f'--model.tokenizer_path {config["tokenizer"]}',
         f'--optimizer.name AdamW',
-        f'--optimizer.eps 1e-8',
+        f'--optimizer.eps 1e-15',  # flame default
         f'--optimizer.lr {config["learning_rate"]}',
         f'--optimizer.weight_decay {config["weight_decay"]}',
         f'--lr_scheduler.warmup_steps {config["warmup_steps"]}',
-        f'--lr_scheduler.lr_min 0.0',
+        f'--lr_scheduler.lr_min 0.1',  # flame default (10% of max lr)
         f'--lr_scheduler.decay_type {config["lr_decay_type"]}',
         f'--training.batch_size {config["batch_size"]}',
         f'--training.seq_len {config["seq_len"]}',
@@ -283,7 +283,9 @@ Examples:
     parser.add_argument("--batch_size", type=int, help="Override batch size")
     parser.add_argument("--seq_len", type=int, help="Override sequence length")
     parser.add_argument("--learning_rate", type=float, help="Override learning rate")
+    parser.add_argument("--warmup_steps", type=int, help="Override warmup steps")
     parser.add_argument("--total_steps", type=int, help="Override total training steps")
+    parser.add_argument("--dropout", type=float, help="Override dropout rate (default: 0.1)")
     parser.add_argument("--no_wandb", action="store_true", help="Disable wandb logging")
     
     args = parser.parse_args()
@@ -307,8 +309,12 @@ Examples:
         config["seq_len"] = args.seq_len
     if args.learning_rate:
         config["learning_rate"] = args.learning_rate
+    if args.warmup_steps:
+        config["warmup_steps"] = args.warmup_steps
     if args.total_steps:
         config["total_steps"] = args.total_steps
+    if args.dropout is not None:
+        config["dropout"] = args.dropout
     if args.no_wandb:
         config["enable_wandb"] = False
     
@@ -320,7 +326,13 @@ Examples:
         exp_name = f"exp/{args.exp_name}"
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        exp_name = f"exp/{args.model}-wikitext103-{timestamp}"
+        # Include overridden params in name for easy identification
+        suffix = ""
+        if args.learning_rate is not None:
+            suffix += f"_lr{config['learning_rate']}"
+        if args.dropout is not None:
+            suffix += f"_drop{config['dropout']}"
+        exp_name = f"exp/{args.model}{suffix}-wikitext103-{timestamp}"
     
     # Run or submit
     if args.submit:
