@@ -5,8 +5,8 @@ import os
 import json
 from typing import Set
 
-from interpret.interpreters import BaseInterpreter, ActivationPatchingInterpreter, ProbeInterpreter, LengthwiseProbeInterpreter
-from interpret.visualization_manager import VisualizationManager
+from state_tracking.interpret.interpreters import BaseInterpreter, ActivationPatchingInterpreter, ProbeInterpreter, LengthwiseProbeInterpreter
+from state_tracking.interpret.visualization_manager import VisualizationManager
 
 
 def parse_arguments() -> argparse.Namespace:

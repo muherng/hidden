@@ -457,6 +457,17 @@ class JobConfig:
             action="store_true",
             help="Use deterministic algorithms wherever possible, may be slower",
         )
+        self.parser.add_argument(
+            "--training.dropout",
+            type=float,
+            default=0.0,
+            help="""
+                Dropout rate to apply after attention and MLP layers.
+                This adds dropout using forward hooks, which works with fla models
+                that don't have built-in dropout support.
+                0.0 means disabled (default). Typical values are 0.1 for regularization.
+            """,
+        )
         # metrics configs
         self.parser.add_argument(
             "--metrics.log_freq",

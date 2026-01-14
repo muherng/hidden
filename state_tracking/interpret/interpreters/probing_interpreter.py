@@ -7,8 +7,8 @@ import torch
 from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from typing import Set, Dict, List, Tuple, Any, Optional
-from interpret.interpreters.base_interpreter import BaseInterpreter
-from interpret.metadata_processors import MetadataProcessor
+from state_tracking.interpret.interpreters.base_interpreter import BaseInterpreter
+from state_tracking.interpret.metadata_processors import MetadataProcessor
 
 
 class ProbeInterpreter(BaseInterpreter):

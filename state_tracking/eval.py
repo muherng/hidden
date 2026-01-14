@@ -10,8 +10,8 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from permutation_task import PermutationTask, PermutationState, compute_parity
-from utils.model_utils import setup_tokenizer, setup_model
+from state_tracking.permutation_task import PermutationTask, PermutationState, compute_parity
+from state_tracking.utils.model_utils import setup_tokenizer, setup_model
 
 sns.set_style("darkgrid")
 

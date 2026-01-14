@@ -3,7 +3,7 @@ from torch.nn import CrossEntropyLoss
 from transformers import GPT2LMHeadModel, LlamaForCausalLM, GPTNeoXForCausalLM
 from transformers import AutoModelForCausalLM
 
-from utils.tree import TransformerScanModel 
+from state_tracking.utils.tree import TransformerScanModel 
 
 
 

@@ -1,5 +1,5 @@
 import sys
-from utils.data_loaders import ChunkedDataset, tokenize_function
+from state_tracking.utils.data_loaders import ChunkedDataset, tokenize_function
 from transformers import AutoTokenizer
 
 

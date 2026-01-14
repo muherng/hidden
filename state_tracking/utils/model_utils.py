@@ -19,7 +19,7 @@ import os
 from torch.nn import CrossEntropyLoss
 
 # Import custom model classes
-from utils.models import (
+from state_tracking.utils.models import (
     GPT2ModelWithLayerTargets,
     LlamaModelWithLayerTargets,
     PythiaModelWithLayerTargets,
@@ -28,7 +28,7 @@ from utils.models import (
     MambaModelWithLayerTargets
 )
 
-from utils.tree import TransformerScanModel
+from state_tracking.utils.tree import TransformerScanModel
 
 def setup_tokenizer(model_name, state_tokens, action_tokens):
     """
