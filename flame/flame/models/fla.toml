@@ -20,6 +20,7 @@ tensor_parallel_degree = 1
 compile = false
 dataset = "HuggingFaceFW/fineweb-edu"
 dataset_name = "default"
+skip_samples = 0  # Number of samples to skip at start (for reserving validation set)
 num_workers = 32
 pin_memory = false
 persistent_workers = false
