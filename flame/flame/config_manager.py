@@ -339,6 +339,12 @@ class JobConfig:
             help="Whether to load dataset in streaming mode, used for huge dataset",
         )
         self.parser.add_argument(
+            "--training.skip_samples",
+            type=int,
+            default=0,
+            help="Number of samples to skip at the beginning of the dataset (for reserving validation set)",
+        )
+        self.parser.add_argument(
             "--training.num_workers",
             type=int,
             default=32,

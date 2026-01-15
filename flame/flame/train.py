@@ -164,6 +164,7 @@ def main(job_config: JobConfig):
         dp_degree=dp_degree,
         num_workers=job_config.training.num_workers,
         seed=job_config.training.seed,
+        skip_samples=getattr(job_config.training, 'skip_samples', 0),
     )
 
     logger.info("Building dataloader...")

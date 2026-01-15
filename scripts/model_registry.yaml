@@ -116,6 +116,7 @@ models:
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     dropout: 0.1
     total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   gla_170M_openwebtext_nodrop:
     name: "GLA-170M-OpenWebText-NoDropout"
@@ -126,6 +127,7 @@ models:
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     dropout: 0.0
     total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   gated_deltanet_170M_openwebtext:
     name: "Gated-DeltaNet-170M-OpenWebText"
@@ -136,6 +138,7 @@ models:
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     dropout: 0.1
     total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   gated_deltanet_170M_openwebtext_nodrop:
     name: "Gated-DeltaNet-170M-OpenWebText-NoDropout"
@@ -146,6 +149,7 @@ models:
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     dropout: 0.0
     total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   # ------------------------------------------
   # DeltaNet

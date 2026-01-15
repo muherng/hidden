@@ -153,6 +153,28 @@ class BufferShuffledIterableDataset(IterableDataset):
         self._epoch = state_dict['epoch']
 
 
+class SkipSamplesIterableDataset(IterableDataset):
+    """Wrapper to skip the first N samples from an iterable dataset."""
+    def __init__(self, dataset: IterableDataset, skip_count: int):
+        self.dataset = dataset
+        self.skip_count = skip_count
+    
+    def __iter__(self):
+        iterator = iter(self.dataset)
+        # Skip the first skip_count samples
+        for _ in range(self.skip_count):
+            try:
+                next(iterator)
+            except StopIteration:
+                break
+        # Yield the rest
+        yield from iterator
+    
+    def __getattr__(self, name):
+        # Delegate other attributes to the wrapped dataset
+        return getattr(self.dataset, name)
+
+
 class OnlineTokenizedIterableDataset(IterableDataset):
     def __init__(
         self, dataset: Dataset, tokenizer: PreTrainedTokenizer, seq_len: int = 2048, rank: int = 0, world_size: int = 1
@@ -553,6 +575,7 @@ def build_dataset(
     dp_degree: Optional[int] = None,
     num_workers: int = 32,
     seed: Optional[int] = None,
+    skip_samples: int = 0,
 ) -> IterableDataset:
     color = utils.Color
     min_num_shards = dp_degree * num_workers if dp_degree else None
@@ -572,6 +595,16 @@ def build_dataset(
             # the states of map-style dataset is recoverable after shuffling
             if seed is not None:
                 dataset = dataset.shuffle(seed=seed)
+            # Apply skip_samples for non-streaming (BEFORE converting to IterableDataset)
+            # Get length before conversion since IterableDataset doesn't support len()
+            if skip_samples > 0:
+                total_size = len(dataset)
+                if skip_samples >= total_size:
+                    raise ValueError(
+                        f"Cannot skip {skip_samples} samples from dataset with only {total_size} samples"
+                    )
+                logger.info(f"Skipping first {skip_samples:,} samples to reserve validation set")
+                dataset = dataset.select(range(skip_samples, total_size))
             if min_num_shards is not None:
                 dataset = dataset.to_iterable_dataset(num_shards=min_num_shards)
         else:
@@ -596,10 +629,24 @@ def build_dataset(
                 )
                 if seed is not None:
                     dataset = dataset.shuffle(seed=seed)
+                # Apply skip_samples for non-streaming (BEFORE converting to IterableDataset)
+                # Get length before conversion since IterableDataset doesn't support len()
+                if skip_samples > 0:
+                    total_size = len(dataset)
+                    if skip_samples >= total_size:
+                        raise ValueError(
+                            f"Cannot skip {skip_samples} samples from dataset with only {total_size} samples"
+                        )
+                    logger.info(f"Skipping first {skip_samples:,} samples to reserve validation set")
+                    dataset = dataset.select(range(skip_samples, total_size))
                 dataset = dataset.to_iterable_dataset(num_shards=min_num_shards)
             else:
                 if seed is not None:
                     dataset = shuffle(dataset, seed=seed)
+                # Apply skip_samples for streaming (after shuffling, before returning)
+                if skip_samples > 0:
+                    logger.info(f"Skipping first {skip_samples:,} samples to reserve validation set")
+                    dataset = SkipSamplesIterableDataset(dataset, skip_samples)
     else:
         datasets = dataset.split(",")
         if dataset_name is not None:

@@ -244,19 +244,45 @@ def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, ba
         data = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
         text = " ".join(data["text"])
     elif dataset_name == "openwebtext":
-        # OpenWebText doesn't have a standard validation split, so we use a subset of train
-        # We'll take a fixed subset for consistent evaluation across runs
-        # Using streaming mode and taking first N samples for efficiency
-        print(f"Loading OpenWebText validation subset (first 10,000 samples)...")
+        # ========================================================================
+        # VALIDATION SET SELECTION FOR OPENWEBTEXT
+        # ========================================================================
+        # OpenWebText doesn't have a standard validation split. We use a reserved
+        # validation set approach:
+        # 
+        # Approach:
+        # - Training skips the first N samples (specified by skip_samples in model registry)
+        # - Validation uses those first N samples (reserved for validation)
+        # - This ensures no overlap between training and validation data
+        # 
+        # Configuration:
+        # - skip_samples is set in model_registry.yaml for OpenWebText models
+        # - Default: 10,000 samples reserved for validation
+        # - This matches the skip_samples parameter used during training
+        # ========================================================================
+        
+        VALIDATION_SIZE = 10_000  # Number of samples reserved for validation (must match skip_samples in training)
+        
+        print(f"Loading OpenWebText validation subset (first {VALIDATION_SIZE:,} samples)...")
+        print(f"  Note: Training skips these samples, so they are reserved for validation")
+        
         full_data = load_dataset("openwebtext", "plain_text", split="train", streaming=True)
-        # Take first 10,000 samples as validation set for consistent evaluation
-        # This provides a reasonable validation set size without loading the entire dataset
+        
+        # Take the first N samples (which training skips)
         val_texts = []
         for i, sample in enumerate(full_data):
-            if i >= 10000:
-                break
+            if len(val_texts) >= VALIDATION_SIZE:
+                break  # Stop after collecting reserved validation samples
             val_texts.append(sample["text"])
-        # Join all validation texts directly (no need for Dataset wrapper)
+        
+        if len(val_texts) < VALIDATION_SIZE:
+            raise ValueError(
+                f"Only collected {len(val_texts)} validation samples, expected {VALIDATION_SIZE}. "
+                f"This may indicate the dataset is smaller than expected."
+            )
+        
+        print(f"  Collected {len(val_texts):,} validation samples")
+        # Join all validation texts directly
         text = " ".join(val_texts)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext-103, wikitext-2, openwebtext")
