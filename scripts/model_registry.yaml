@@ -80,7 +80,14 @@ models:
     name: "Gated-DeltaNet-170M"
     model_type: gated_deltanet
     config: configs/gated_deltanet_170M.json
-    description: "170M parameter Gated DeltaNet model"
+    description: "170M parameter Gated DeltaNet model (original config)"
+    # Uses flame defaults (lr=1e-3, etc.)
+  
+  gated_deltanet_170M_fixed:
+    name: "Gated-DeltaNet-170M-Fixed"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M_fixed.json
+    description: "170M Gated DeltaNet with corrected head_dim=96 (follows 0.75*hidden_size formula)"
     # Uses flame defaults (lr=1e-3, etc.)
   
   gated_deltanet_340M:
