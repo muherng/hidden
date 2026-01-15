@@ -1,9 +1,0 @@
-cpu-bind=MASK - andreas-h100-1, task  0  0 [1373332]: mask 0x100 set
-Traceback (most recent call last):
-  File "/data/lingo/morrisyau/miniforge3/envs/fla2/lib/python3.10/runpy.py", line 196, in _run_module_as_main
-    return _run_code(code, main_globals, None,
-  File "/data/lingo/morrisyau/miniforge3/envs/fla2/lib/python3.10/runpy.py", line 86, in _run_code
-    exec(code, run_globals)
-  File "/data/lingo/morrisyau/hidden/models/tree_model6.py", line 41, in <module>
-    import matplotlib.pyplot as plt
-ModuleNotFoundError: No module named 'matplotlib'

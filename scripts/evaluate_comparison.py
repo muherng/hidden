@@ -12,6 +12,9 @@ Usage:
     # Evaluate with explicit model type
     python scripts/evaluate_comparison.py --exp_path flame/exp/my_exp --model gla_170M
     
+    # Evaluate on OpenWebText (for models trained on OpenWebText)
+    python scripts/evaluate_comparison.py --exp_path flame/exp/gla_170M_openwebtext-... --dataset openwebtext
+    
     # Evaluate specific checkpoint steps
     python scripts/evaluate_comparison.py --exp_path flame/exp/my_exp --steps 5000 10000 15000
     
@@ -236,10 +239,27 @@ def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, ba
     # Load validation data
     if dataset_name == "wikitext-103":
         data = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
-    else:
+        text = " ".join(data["text"])
+    elif dataset_name == "wikitext-2":
         data = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
-    
-    text = " ".join(data["text"])
+        text = " ".join(data["text"])
+    elif dataset_name == "openwebtext":
+        # OpenWebText doesn't have a standard validation split, so we use a subset of train
+        # We'll take a fixed subset for consistent evaluation across runs
+        # Using streaming mode and taking first N samples for efficiency
+        print(f"Loading OpenWebText validation subset (first 10,000 samples)...")
+        full_data = load_dataset("openwebtext", "plain_text", split="train", streaming=True)
+        # Take first 10,000 samples as validation set for consistent evaluation
+        # This provides a reasonable validation set size without loading the entire dataset
+        val_texts = []
+        for i, sample in enumerate(full_data):
+            if i >= 10000:
+                break
+            val_texts.append(sample["text"])
+        # Join all validation texts directly (no need for Dataset wrapper)
+        text = " ".join(val_texts)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext-103, wikitext-2, openwebtext")
     tokenizer.model_max_length = int(1e7)
     token_ids = tokenizer.encode(text, add_special_tokens=False)
     
@@ -276,6 +296,13 @@ def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, ba
 
 def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wikitext-103', 
                        seq_len=512, batch_size=8, steps=None, output=None):
+    """
+    Evaluate all checkpoints for an experiment.
+    
+    Args:
+        dataset: Evaluation dataset. Use 'openwebtext' for models trained on OpenWebText,
+                 'wikitext-103' or 'wikitext-2' for WikiText-trained models.
+    """
     """Evaluate all checkpoints for an experiment."""
     
     # Auto-detect model if not provided
@@ -492,8 +519,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Evaluate single experiment
+    # Evaluate single experiment (WikiText-103, default)
     python scripts/evaluate_comparison.py --exp_path flame/exp/gla_170M-wikitext103-...
+    
+    # Evaluate on OpenWebText (for OpenWebText-trained models)
+    python scripts/evaluate_comparison.py --exp_path flame/exp/gla_170M_openwebtext-... --dataset openwebtext
     
     # Evaluate with explicit model
     python scripts/evaluate_comparison.py --exp_path flame/exp/my_exp --model gated_deltanet_340M
@@ -516,7 +546,8 @@ Examples:
     
     # Evaluation options
     parser.add_argument("--dataset", type=str, default="wikitext-103",
-                       choices=["wikitext-103", "wikitext-2"])
+                       choices=["wikitext-103", "wikitext-2", "openwebtext"],
+                       help="Dataset to evaluate on. Use 'openwebtext' for models trained on OpenWebText.")
     parser.add_argument("--seq_len", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--steps", type=int, nargs='+', help="Specific steps to evaluate")

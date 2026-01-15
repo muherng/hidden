@@ -105,6 +105,49 @@ models:
     batch_size: 16
   
   # ------------------------------------------
+  # OpenWebText Training (Chinchilla Scaling)
+  # ------------------------------------------
+  gla_170M_openwebtext:
+    name: "GLA-170M-OpenWebText"
+    model_type: gla
+    config: configs/gla_170M.json
+    description: "170M GLA model trained on OpenWebText with dropout=0.1 (Chinchilla scaling: 3.4B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dropout: 0.1
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+  
+  gla_170M_openwebtext_nodrop:
+    name: "GLA-170M-OpenWebText-NoDropout"
+    model_type: gla
+    config: configs/gla_170M.json
+    description: "170M GLA model trained on OpenWebText with dropout=0.0 (Chinchilla scaling: 3.4B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dropout: 0.0
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+  
+  gated_deltanet_170M_openwebtext:
+    name: "Gated-DeltaNet-170M-OpenWebText"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M.json
+    description: "170M Gated DeltaNet model (original config, head_dim=128) trained on OpenWebText with dropout=0.1 (Chinchilla scaling: 3.4B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dropout: 0.1
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+  
+  gated_deltanet_170M_openwebtext_nodrop:
+    name: "Gated-DeltaNet-170M-OpenWebText-NoDropout"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M.json
+    description: "170M Gated DeltaNet model (original config, head_dim=128) trained on OpenWebText with dropout=0.0 (Chinchilla scaling: 3.4B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dropout: 0.0
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+  
+  # ------------------------------------------
   # DeltaNet
   # ------------------------------------------
   delta_net_340M:

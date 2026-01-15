@@ -86,6 +86,19 @@ def list_models(registry):
 
 def generate_train_command(config, exp_name, flame_dir):
     """Generate the training command for flame."""
+    # #region agent log
+    import json
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "A",
+            "location": "train_comparison.py:87",
+            "message": "generate_train_command entry",
+            "data": {"dataset_name": config.get("dataset_name"), "dataset_name_type": str(type(config.get("dataset_name")))},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
     cmd_parts = [
         f'NGPU=1 bash train.sh',
         f'--job.config_file flame/models/fla.toml',
@@ -105,7 +118,24 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--training.steps {config["total_steps"]}',
         f'--training.max_norm {config["max_norm"]}',
         f'--training.dataset {config["dataset"]}',
-        f'--training.dataset_name {config["dataset_name"]}',
+    ]
+    # #region agent log
+    dataset_name_val = config.get("dataset_name")
+    dataset_name_cmd = f'--training.dataset_name {dataset_name_val}' if dataset_name_val is not None else ''
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "A",
+            "location": "train_comparison.py:108",
+            "message": "dataset_name before adding to cmd",
+            "data": {"dataset_name": dataset_name_val, "will_add_to_cmd": dataset_name_val is not None, "cmd_fragment": dataset_name_cmd},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
+    if dataset_name_val is not None:
+        cmd_parts.append(f'--training.dataset_name {dataset_name_val}')
+    cmd_parts.extend([
         f'--training.dataset_split train',
         f'--training.num_workers {config["num_workers"]}',
         f'--training.prefetch_factor {config["prefetch_factor"]}',
@@ -115,7 +145,7 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--checkpoint.load_step -1',
         f'--checkpoint.keep_latest_k {config["keep_latest_k"]}',
         f'--metrics.log_freq {config["log_freq"]}',
-    ]
+    ])
     
     if config.get("skip_nan_inf", True):
         cmd_parts.append('--training.skip_nan_inf')
@@ -128,6 +158,19 @@ def generate_train_command(config, exp_name, flame_dir):
 
 def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override=None):
     """Generate a complete SLURM script."""
+    # #region agent log
+    import json
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "C",
+            "location": "train_comparison.py:129",
+            "message": "generate_slurm_script entry",
+            "data": {"model_id": model_id, "slurm_profile": slurm_profile},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
     registry = load_registry()
     slurm_config = registry["slurm_profiles"].get(slurm_profile, registry["slurm_profiles"]["lingo"])
     
@@ -135,6 +178,18 @@ def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, 
     partition = partition_override if partition_override else slurm_config["partition"]
     
     train_cmd = generate_train_command(config, exp_name, flame_dir)
+    # #region agent log
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "C",
+            "location": "train_comparison.py:137",
+            "message": "train_cmd generated",
+            "data": {"train_cmd_length": len(train_cmd), "train_cmd_preview": train_cmd[:200]},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
     
     script = f'''#!/bin/bash
 #SBATCH --job-name={model_id}-wiki103
@@ -235,16 +290,65 @@ def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_r
         return
     
     # Submit the job
+    # #region agent log
+    import json
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "B,E",
+            "location": "train_comparison.py:238",
+            "message": "before sbatch call",
+            "data": {"script_path": str(script_path), "script_exists": script_path.exists()},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
     result = subprocess.run(
         ["sbatch", str(script_path)],
         capture_output=True,
         text=True
     )
+    # #region agent log
+    with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+        log.write(json.dumps({
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "B,E",
+            "location": "train_comparison.py:242",
+            "message": "after sbatch call",
+            "data": {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
+            "timestamp": int(__import__('time').time() * 1000)
+        }) + '\n')
+    # #endregion
     
     if result.returncode == 0:
         print(f"Job submitted: {result.stdout.strip()}")
+        # #region agent log
+        with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+            log.write(json.dumps({
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "D",
+                "location": "train_comparison.py:245",
+                "message": "sbatch returned success",
+                "data": {"job_id": result.stdout.strip()},
+                "timestamp": int(__import__('time').time() * 1000)
+            }) + '\n')
+        # #endregion
     else:
         print(f"Failed to submit job: {result.stderr}")
+        # #region agent log
+        with open('/data/lingo/morrisyau/hidden/.cursor/debug.log', 'a') as log:
+            log.write(json.dumps({
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "B,C",
+                "location": "train_comparison.py:248",
+                "message": "sbatch returned error",
+                "data": {"returncode": result.returncode, "stderr": result.stderr, "stdout": result.stdout},
+                "timestamp": int(__import__('time').time() * 1000)
+            }) + '\n')
+        # #endregion
         sys.exit(1)
 
 
@@ -326,13 +430,29 @@ Examples:
         exp_name = f"exp/{args.exp_name}"
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Include overridden params in name for easy identification
+        # Get dataset name from config (normalize for filename)
+        dataset_name = config.get('dataset', 'unknown')
+        # Normalize dataset name: remove special chars, use short form
+        if 'wikitext' in dataset_name.lower():
+            dataset_short = 'wikitext103'
+        elif 'openwebtext' in dataset_name.lower():
+            dataset_short = 'openwebtext'
+        else:
+            dataset_short = dataset_name.replace('-', '_').replace('/', '_')
+        
+        # Always include dropout in name for clarity
+        dropout_val = config.get('dropout', 0.0)
+        if dropout_val == 0.0:
+            dropout_str = 'nodrop'
+        else:
+            dropout_str = f'drop{dropout_val}'
+        
+        # Include other overridden params if specified
         suffix = ""
         if args.learning_rate is not None:
             suffix += f"_lr{config['learning_rate']}"
-        if args.dropout is not None:
-            suffix += f"_drop{config['dropout']}"
-        exp_name = f"exp/{args.model}{suffix}-wikitext103-{timestamp}"
+        
+        exp_name = f"exp/{args.model}_{dataset_short}_{dropout_str}{suffix}_{timestamp}"
     
     # Run or submit
     if args.submit:
