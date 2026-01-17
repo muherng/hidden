@@ -221,8 +221,17 @@ def convert_checkpoint(exp_path, step, config_path, tokenizer_path='gpt2'):
     return hf_path
 
 
-def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, batch_size=8, device='cuda'):
-    """Evaluate a single checkpoint."""
+def evaluate_checkpoint(model_path, token_ids=None, dataset_name='wikitext-103', seq_len=512, batch_size=8, device='cuda'):
+    """Evaluate a single checkpoint.
+    
+    Args:
+        model_path: Path to the model checkpoint
+        token_ids: Pre-tokenized validation data (optional). If provided, dataset_name is ignored.
+        dataset_name: Dataset name (only used if token_ids is None)
+        seq_len: Sequence length
+        batch_size: Batch size
+        device: Device to run on
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from datasets import load_dataset
     
@@ -236,58 +245,61 @@ def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, ba
     
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     
-    # Load validation data
-    if dataset_name == "wikitext-103":
-        data = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
-        text = " ".join(data["text"])
-    elif dataset_name == "wikitext-2":
-        data = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
-        text = " ".join(data["text"])
-    elif dataset_name == "openwebtext":
-        # ========================================================================
-        # VALIDATION SET SELECTION FOR OPENWEBTEXT
-        # ========================================================================
-        # OpenWebText doesn't have a standard validation split. We use a reserved
-        # validation set approach:
-        # 
-        # Approach:
-        # - Training skips the first N samples (specified by skip_samples in model registry)
-        # - Validation uses those first N samples (reserved for validation)
-        # - This ensures no overlap between training and validation data
-        # 
-        # Configuration:
-        # - skip_samples is set in model_registry.yaml for OpenWebText models
-        # - Default: 10,000 samples reserved for validation
-        # - This matches the skip_samples parameter used during training
-        # ========================================================================
+    # Load validation data (only if not pre-provided)
+    if token_ids is None:
+        if dataset_name == "wikitext-103":
+            data = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
+            text = " ".join(data["text"])
+        elif dataset_name == "wikitext-2":
+            data = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
+            text = " ".join(data["text"])
+        elif dataset_name == "openwebtext":
+            # ========================================================================
+            # VALIDATION SET SELECTION FOR OPENWEBTEXT
+            # ========================================================================
+            # OpenWebText doesn't have a standard validation split. We use a reserved
+            # validation set approach:
+            # 
+            # Approach:
+            # - Training skips the first N samples (specified by skip_samples in model registry)
+            # - Validation uses a subset of those first N samples (first 1,000 samples)
+            # - This ensures no overlap between training and validation data
+            # 
+            # Configuration:
+            # - skip_samples is set in model_registry.yaml for OpenWebText models (typically 10,000)
+            # - Validation uses first 1,000 samples (subset of skipped samples for faster evaluation)
+            # - Since training skips 10,000 samples, using first 1,000 is safe and non-overlapping
+            # ========================================================================
+            
+            # Use first 1,000 samples for validation (subset of the 10,000 skipped during training)
+            VALIDATION_SIZE = 1_000  # Using subset of skipped samples for faster validation
+            
+            print(f"Loading OpenWebText validation subset (first {VALIDATION_SIZE:,} samples)...")
+            print(f"  Note: Training skips first 10,000 samples, so these are reserved for validation")
+            
+            full_data = load_dataset("openwebtext", "plain_text", split="train", streaming=True)
+            
+            # Take the first N samples (which training skips)
+            val_texts = []
+            for i, sample in enumerate(full_data):
+                if len(val_texts) >= VALIDATION_SIZE:
+                    break  # Stop after collecting reserved validation samples
+                val_texts.append(sample["text"])
+            
+            if len(val_texts) < VALIDATION_SIZE:
+                raise ValueError(
+                    f"Only collected {len(val_texts)} validation samples, expected {VALIDATION_SIZE}. "
+                    f"This may indicate the dataset is smaller than expected."
+                )
+            
+            print(f"  Collected {len(val_texts):,} validation samples")
+            # Join all validation texts directly
+            text = " ".join(val_texts)
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext-103, wikitext-2, openwebtext")
         
-        VALIDATION_SIZE = 10_000  # Number of samples reserved for validation (must match skip_samples in training)
-        
-        print(f"Loading OpenWebText validation subset (first {VALIDATION_SIZE:,} samples)...")
-        print(f"  Note: Training skips these samples, so they are reserved for validation")
-        
-        full_data = load_dataset("openwebtext", "plain_text", split="train", streaming=True)
-        
-        # Take the first N samples (which training skips)
-        val_texts = []
-        for i, sample in enumerate(full_data):
-            if len(val_texts) >= VALIDATION_SIZE:
-                break  # Stop after collecting reserved validation samples
-            val_texts.append(sample["text"])
-        
-        if len(val_texts) < VALIDATION_SIZE:
-            raise ValueError(
-                f"Only collected {len(val_texts)} validation samples, expected {VALIDATION_SIZE}. "
-                f"This may indicate the dataset is smaller than expected."
-            )
-        
-        print(f"  Collected {len(val_texts):,} validation samples")
-        # Join all validation texts directly
-        text = " ".join(val_texts)
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext-103, wikitext-2, openwebtext")
-    tokenizer.model_max_length = int(1e7)
-    token_ids = tokenizer.encode(text, add_special_tokens=False)
+        tokenizer.model_max_length = int(1e7)
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
     
     # Create samples
     samples = []
@@ -321,7 +333,7 @@ def evaluate_checkpoint(model_path, dataset_name='wikitext-103', seq_len=512, ba
 
 
 def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wikitext-103', 
-                       seq_len=512, batch_size=8, steps=None, output=None):
+                       seq_len=512, batch_size=8, steps=None, output=None, cleanup=True):
     """
     Evaluate all checkpoints for an experiment.
     
@@ -373,6 +385,52 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
     
     print(f"Evaluating {len(eval_steps)} checkpoints: {eval_steps}")
     
+    # Load and tokenize validation data ONCE before the loop
+    print(f"\nLoading validation data for {dataset}...")
+    token_ids = None
+    if dataset == "openwebtext":
+        from datasets import load_dataset
+        from transformers import AutoTokenizer
+        
+        # Use first 1,000 samples for validation (subset of the 10,000 skipped during training)
+        VALIDATION_SIZE = 1_000  # Using subset of skipped samples for faster validation
+        print(f"Loading OpenWebText validation subset (first {VALIDATION_SIZE:,} samples)...")
+        print(f"  Note: Training skips first 10,000 samples, so these are reserved for validation")
+        
+        full_data = load_dataset("openwebtext", "plain_text", split="train", streaming=True)
+        val_texts = []
+        for i, sample in enumerate(full_data):
+            if len(val_texts) >= VALIDATION_SIZE:
+                break
+            val_texts.append(sample["text"])
+        
+        if len(val_texts) < VALIDATION_SIZE:
+            raise ValueError(
+                f"Only collected {len(val_texts)} validation samples, expected {VALIDATION_SIZE}."
+            )
+        
+        print(f"  Collected {len(val_texts):,} validation samples")
+        text = " ".join(val_texts)
+        
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.model_max_length = int(1e7)
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
+        print(f"  Tokenized into {len(token_ids):,} tokens")
+    elif dataset in ["wikitext-103", "wikitext-2"]:
+        from datasets import load_dataset
+        from transformers import AutoTokenizer
+        
+        if dataset == "wikitext-103":
+            data = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
+        else:
+            data = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
+        text = " ".join(data["text"])
+        
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.model_max_length = int(1e7)
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
+        print(f"  Tokenized into {len(token_ids):,} tokens")
+    
     results = []
     
     for step in tqdm(eval_steps, desc="Evaluating checkpoints"):
@@ -385,9 +443,9 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
             print(f"  Skipping step {step} (conversion failed)")
             continue
         
-        # Evaluate
+        # Evaluate (pass pre-tokenized data)
         try:
-            loss, ppl = evaluate_checkpoint(hf_path, dataset, seq_len, batch_size)
+            loss, ppl = evaluate_checkpoint(hf_path, token_ids=token_ids, seq_len=seq_len, batch_size=batch_size)
             results.append({
                 'step': step,
                 'val_loss': loss,
@@ -427,7 +485,89 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
         plot_results([{'name': model_id or 'Model', 'results': results}], 
                     os.path.join(exp_path, 'eval_curve.png'))
     
+    # Clean up hf-* directories after evaluation if requested
+    if cleanup:
+        print("\n" + "=" * 60)
+        print("Cleaning up HuggingFace checkpoint directories...")
+        print("=" * 60)
+        cleanup_hf_checkpoints(exp_path=exp_path)
+    
     return results
+
+
+def cleanup_hf_checkpoints(exp_path=None, cleanup_all=False):
+    """
+    Clean up HuggingFace checkpoint directories (hf-*) to free disk space.
+    These can be regenerated from original checkpoints if needed.
+    
+    Args:
+        exp_path: Path to specific experiment directory. If None and cleanup_all=False, does nothing.
+        cleanup_all: If True, clean up all hf-* directories in all experiments.
+    """
+    import shutil
+    
+    if cleanup_all:
+        # Clean up all hf-* directories across all experiments
+        flame_dir = str(get_project_root() / "flame")
+        exp_base = os.path.join(flame_dir, "exp")
+        if not os.path.exists(exp_base):
+            print(f"Experiment directory not found: {exp_base}")
+            return
+        
+        hf_dirs = []
+        for root, dirs, files in os.walk(exp_base):
+            for d in dirs:
+                if d.startswith("hf-"):
+                    hf_dirs.append(os.path.join(root, d))
+        
+        if not hf_dirs:
+            print("No hf-* directories found to clean up.")
+            return
+        
+        print(f"Found {len(hf_dirs)} hf-* directories to clean up.")
+        total_size = 0
+        for hf_dir in hf_dirs:
+            try:
+                size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                          for dirpath, dirnames, filenames in os.walk(hf_dir)
+                          for filename in filenames)
+                total_size += size
+                shutil.rmtree(hf_dir)
+            except Exception as e:
+                print(f"Warning: Could not delete {hf_dir}: {e}")
+        
+        print(f"Cleaned up {len(hf_dirs)} directories, freed ~{total_size / (1024**3):.2f} GB")
+    
+    elif exp_path:
+        # Clean up hf-* directories for a specific experiment
+        if not os.path.exists(exp_path):
+            print(f"Experiment path not found: {exp_path}")
+            return
+        
+        hf_dirs = []
+        for item in os.listdir(exp_path):
+            if item.startswith("hf-") and os.path.isdir(os.path.join(exp_path, item)):
+                hf_dirs.append(os.path.join(exp_path, item))
+        
+        if not hf_dirs:
+            print(f"No hf-* directories found in {exp_path}")
+            return
+        
+        print(f"Found {len(hf_dirs)} hf-* directories to clean up in {exp_path}")
+        total_size = 0
+        for hf_dir in hf_dirs:
+            try:
+                size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                          for dirpath, dirnames, filenames in os.walk(hf_dir)
+                          for filename in filenames)
+                total_size += size
+                shutil.rmtree(hf_dir)
+            except Exception as e:
+                print(f"Warning: Could not delete {hf_dir}: {e}")
+        
+        print(f"Cleaned up {len(hf_dirs)} directories, freed ~{total_size / (1024**3):.2f} GB")
+    else:
+        print("No cleanup path specified. Use --cleanup-all or --exp_path with --cleanup")
 
 
 def plot_results(experiments, output_path):
@@ -578,6 +718,10 @@ Examples:
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--steps", type=int, nargs='+', help="Specific steps to evaluate")
     parser.add_argument("--output", type=str, help="Output JSON file for results")
+    parser.add_argument("--cleanup", action="store_true",
+                       help="Delete hf-* checkpoint directories after evaluation to free disk space")
+    parser.add_argument("--cleanup-all", action="store_true",
+                       help="Delete all hf-* checkpoint directories across all experiments (frees ~151GB)")
     
     # Comparison mode
     parser.add_argument("--compare", type=str, nargs='+', 
@@ -586,6 +730,11 @@ Examples:
                        help="Output directory for comparison results")
     
     args = parser.parse_args()
+    
+    # Handle cleanup operations
+    if args.cleanup_all:
+        cleanup_hf_checkpoints(cleanup_all=True)
+        return
     
     if args.compare:
         compare_experiments(args.compare, args.compare_output)
@@ -598,7 +747,8 @@ Examples:
             seq_len=args.seq_len,
             batch_size=args.batch_size,
             steps=args.steps,
-            output=args.output
+            output=args.output,
+            cleanup=args.cleanup
         )
     else:
         parser.error("Either --exp_path or --compare is required")
