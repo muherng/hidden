@@ -106,6 +106,12 @@ def generate_train_command(config, exp_name, flame_dir):
         f'--training.max_norm {config["max_norm"]}',
         f'--training.dataset {config["dataset"]}',
     ]
+    
+    # Add optimizer beta parameters if specified (for GPT2 small to match TransformerScanModel or use best practices)
+    if config.get("optimizer_beta1") is not None:
+        cmd_parts.append(f'--optimizer.beta1 {config["optimizer_beta1"]}')
+    if config.get("optimizer_beta2") is not None:
+        cmd_parts.append(f'--optimizer.beta2 {config["optimizer_beta2"]}')
     dataset_name_val = config.get("dataset_name")
     if dataset_name_val is not None:
         cmd_parts.append(f'--training.dataset_name {dataset_name_val}')

@@ -152,6 +152,71 @@ models:
     skip_samples: 10000  # Reserve first 10K samples for validation set
   
   # ------------------------------------------
+  # GPT2 Small (125M parameters)
+  # ------------------------------------------
+  gpt2_small_wikitext103_drop01:
+    name: "GPT2-Small-125M-WikiText-103-Dropout0.1"
+    model_type: transformer
+    config: configs/gpt2_small.json
+    description: "125M GPT2 small model trained on WikiText-103 for 10 epochs with dropout=0.1 (match TransformerScanModel hyperparameters)"
+    dataset: wikitext
+    dataset_name: wikitext-103-raw-v1
+    learning_rate: 1.0e-4
+    weight_decay: 0.01  # Match TransformerScanModel
+    warmup_steps: 1000  # Match TransformerScanModel
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999  # HuggingFace default (match TransformerScanModel)
+    total_steps: 30518  # 10 epochs × 100M tokens / (64 batch_size * 512 seq_len) = 1B tokens / 32,768
+    dropout: 0.1
+  
+  gpt2_small_wikitext103_nodrop:
+    name: "GPT2-Small-125M-WikiText-103-NoDropout"
+    model_type: transformer
+    config: configs/gpt2_small.json
+    description: "125M GPT2 small model trained on WikiText-103 for 10 epochs with dropout=0.0 (match TransformerScanModel hyperparameters)"
+    dataset: wikitext
+    dataset_name: wikitext-103-raw-v1
+    learning_rate: 1.0e-4
+    weight_decay: 0.01  # Match TransformerScanModel
+    warmup_steps: 1000  # Match TransformerScanModel
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999  # HuggingFace default (match TransformerScanModel)
+    total_steps: 30518  # 10 epochs × 100M tokens / (64 batch_size * 512 seq_len) = 1B tokens / 32,768
+    dropout: 0.0
+  
+  gpt2_small_openwebtext_drop01:
+    name: "GPT2-Small-125M-OpenWebText-Dropout0.1"
+    model_type: transformer
+    config: configs/gpt2_small.json
+    description: "125M GPT2 small model trained on OpenWebText with dropout=0.1 (Chinchilla scaling: 3.4B tokens, best practice hyperparameters)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    learning_rate: 1.0e-4
+    weight_decay: 0.1  # Best practice (nanoGPT)
+    warmup_steps: 2000  # Best practice (nanoGPT)
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95  # Best practice (nanoGPT, flame default)
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
+    dropout: 0.1
+  
+  gpt2_small_openwebtext_nodrop:
+    name: "GPT2-Small-125M-OpenWebText-NoDropout"
+    model_type: transformer
+    config: configs/gpt2_small.json
+    description: "125M GPT2 small model trained on OpenWebText with dropout=0.0 (Chinchilla scaling: 3.4B tokens, best practice hyperparameters)"
+    dataset: openwebtext
+    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    learning_rate: 1.0e-4
+    weight_decay: 0.1  # Best practice (nanoGPT)
+    warmup_steps: 2000  # Best practice (nanoGPT)
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95  # Best practice (nanoGPT, flame default)
+    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
+    dropout: 0.0
+  
+  # ------------------------------------------
   # DeltaNet
   # ------------------------------------------
   delta_net_340M:
