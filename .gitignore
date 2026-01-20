@@ -43,6 +43,7 @@ data/
 # Flame exclusions (large/generated files)
 flame/exp/
 flame/logs/
+flame/cache/
 flame/wandb/
 flame/build/
 flame/dist/
