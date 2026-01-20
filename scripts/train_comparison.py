@@ -142,13 +142,117 @@ def generate_train_command(config, exp_name, flame_dir):
     return ' \\\n  '.join(cmd_parts)
 
 
-def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override=None):
+def generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, dry_run=False, partition_override=None, qos_override=None):
+    """Generate SLURM script for GPT2 small using HuggingFace Trainer."""
+    registry = load_registry()
+    slurm_config = registry["slurm_profiles"].get(slurm_profile, registry["slurm_profiles"]["lingo"])
+    partition = partition_override if partition_override else slurm_config["partition"]
+    qos = qos_override if qos_override else slurm_config["qos"]
+    
+    project_root = get_project_root()
+    flame_dir = str(project_root / "flame")
+    script_path = project_root / "models" / "train_gpt2_small.py"
+    
+    # Build training command
+    cmd_parts = [f"python3 {script_path}"]
+    
+    if 'wikitext' in config.get('dataset', ''):
+        cmd_parts.append('--dataset wikitext-103')
+    elif 'openwebtext' in config.get('dataset', ''):
+        cmd_parts.append('--dataset openwebtext')
+        if config.get('skip_samples'):
+            cmd_parts.append(f'--skip_samples {config["skip_samples"]}')
+    
+    cmd_parts.extend([
+        f'--dropout {config.get("dropout", 0.0)}',
+        f'--learning_rate {config.get("learning_rate", 1e-4)}',
+        f'--weight_decay {config.get("weight_decay", 0.01)}',
+        f'--warmup_steps {config.get("warmup_steps", 1000)}',
+        f'--batch_size {config.get("batch_size", 64)}',
+        f'--seq_len {config.get("seq_len", 512)}',
+        f'--tokenize_workers {config.get("tokenize_workers", 8)}',
+        f'--adam_beta1 {config.get("optimizer_beta1", 0.9)}',
+        f'--adam_beta2 {config.get("optimizer_beta2", 0.999)}',
+    ])
+    
+    if config.get('total_steps'):
+        cmd_parts.append(f'--total_steps {config["total_steps"]}')
+    else:
+        cmd_parts.append('--epochs 10')
+    
+    cmd_parts.extend([
+        f'--save_steps {config.get("checkpoint_interval", 5000)}',
+        f'--eval_steps {config.get("checkpoint_interval", 5000)}',
+        f'--logging_steps {config.get("log_freq", 100)}',
+    ])
+    
+    if not config.get('enable_wandb', True):
+        cmd_parts.append('--nowandb')
+    
+    train_cmd = ' \\\n  '.join(cmd_parts)
+    
+    script = f'''#!/bin/bash
+#SBATCH --job-name={model_id}
+#SBATCH --account={slurm_config["account"]}
+#SBATCH --partition={partition}
+#SBATCH --qos={qos}
+#SBATCH --time={slurm_config["time"]}
+#SBATCH --output={flame_dir}/logs/{model_id}_%j.log
+#SBATCH --error={flame_dir}/logs/{model_id}_%j.err
+#SBATCH --gpus={slurm_config["gpus"]}
+#SBATCH --cpus-per-task={slurm_config["cpus_per_task"]}
+#SBATCH --mem={slurm_config["mem"]}
+
+# ============================================
+# {config.get("name", model_id)} Training (HuggingFace)
+# ============================================
+# Model: {config.get("name", model_id)}
+# Description: {config.get("description", "")}
+# Using: HuggingFace Trainer (no Flash Attention required)
+# ============================================
+
+# Initialize conda
+source {slurm_config["conda_source"]}
+conda activate {slurm_config["conda_env"]}
+
+# Install accelerate if not present (required for HuggingFace Trainer)
+pip install accelerate>=0.26.0 --quiet || true
+
+# Change to project root
+cd {project_root}
+
+# Create logs directory
+mkdir -p {flame_dir}/logs
+
+echo "============================================"
+echo "Training: {config.get('name', model_id)}"
+echo "============================================"
+echo "Using: HuggingFace Trainer"
+echo "Dataset: {config.get('dataset_name', config.get('dataset', 'unknown'))}"
+echo "Batch Size: {config.get('batch_size', 64)}"
+echo "Seq Length: {config.get('seq_len', 512)}"
+echo "Learning Rate: {config.get('learning_rate', 1e-4)}"
+echo "Warmup Steps: {config.get('warmup_steps', 1000)}"
+echo "Total Steps: {config.get('total_steps', 'N/A (using epochs)')}"
+echo "============================================"
+
+{train_cmd}
+
+echo "============================================"
+echo "Training Complete!"
+echo "============================================"
+'''
+    return script
+
+
+def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override=None, qos_override=None):
     """Generate a complete SLURM script."""
     registry = load_registry()
     slurm_config = registry["slurm_profiles"].get(slurm_profile, registry["slurm_profiles"]["lingo"])
     
-    # Allow partition override from command line
+    # Allow partition and qos override from command line
     partition = partition_override if partition_override else slurm_config["partition"]
+    qos = qos_override if qos_override else slurm_config["qos"]
     
     train_cmd = generate_train_command(config, exp_name, flame_dir)
     
@@ -156,7 +260,7 @@ def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, 
 #SBATCH --job-name={model_id}-wiki103
 #SBATCH --account={slurm_config["account"]}
 #SBATCH --partition={partition}
-#SBATCH --qos={slurm_config["qos"]}
+#SBATCH --qos={qos}
 #SBATCH --time={slurm_config["time"]}
 #SBATCH --output={flame_dir}/logs/{model_id}_%j.log
 #SBATCH --error={flame_dir}/logs/{model_id}_%j.err
@@ -208,6 +312,11 @@ echo "============================================"
 
 def run_training(config, model_id, exp_name, flame_dir, dry_run=False):
     """Run training locally (non-SLURM)."""
+    # Check if this is a GPT2 small model (use HuggingFace instead of flame)
+    if model_id.startswith('gpt2_small'):
+        run_gpt2_small_training(config, model_id, exp_name, dry_run)
+        return
+    
     train_cmd = generate_train_command(config, exp_name, flame_dir)
     
     print("=" * 60)
@@ -228,9 +337,72 @@ def run_training(config, model_id, exp_name, flame_dir, dry_run=False):
     subprocess.run(train_cmd, shell=True, check=True)
 
 
-def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_run=False, partition_override=None):
+def run_gpt2_small_training(config, model_id, exp_name, dry_run=False):
+    """Run GPT2 small training using HuggingFace Trainer (avoids Flash Attention requirement)."""
+    project_root = get_project_root()
+    script_path = project_root / "models" / "train_gpt2_small.py"
+    
+    # Build command
+    cmd = ["python3", str(script_path)]
+    
+    # Dataset
+    if 'wikitext' in config.get('dataset', ''):
+        cmd.extend(['--dataset', 'wikitext-103'])
+    elif 'openwebtext' in config.get('dataset', ''):
+        cmd.extend(['--dataset', 'openwebtext'])
+        if config.get('skip_samples'):
+            cmd.extend(['--skip_samples', str(config['skip_samples'])])
+    
+    # Hyperparameters
+    cmd.extend(['--dropout', str(config.get('dropout', 0.0))])
+    cmd.extend(['--learning_rate', str(config.get('learning_rate', 1e-4))])
+    cmd.extend(['--weight_decay', str(config.get('weight_decay', 0.01))])
+    cmd.extend(['--warmup_steps', str(config.get('warmup_steps', 1000))])
+    cmd.extend(['--batch_size', str(config.get('batch_size', 64))])
+    cmd.extend(['--seq_len', str(config.get('seq_len', 512))])
+    cmd.extend(['--tokenize_workers', str(config.get('tokenize_workers', 8))])
+    cmd.extend(['--adam_beta1', str(config.get('optimizer_beta1', 0.9))])
+    cmd.extend(['--adam_beta2', str(config.get('optimizer_beta2', 0.999))])
+    
+    # Training steps
+    if config.get('total_steps'):
+        cmd.extend(['--total_steps', str(config['total_steps'])])
+    else:
+        cmd.extend(['--epochs', '10'])
+    
+    # Checkpointing
+    cmd.extend(['--save_steps', str(config.get('checkpoint_interval', 5000))])
+    cmd.extend(['--eval_steps', str(config.get('checkpoint_interval', 5000))])
+    cmd.extend(['--logging_steps', str(config.get('log_freq', 100))])
+    
+    # Wandb
+    if not config.get('enable_wandb', True):
+        cmd.append('--nowandb')
+    
+    print("=" * 60)
+    print(f"Training: {config.get('name', model_id)}")
+    print("=" * 60)
+    print(f"Using: HuggingFace Trainer (no Flash Attention required)")
+    print(f"Experiment: {exp_name}")
+    print("=" * 60)
+    
+    if dry_run:
+        print("\n[DRY RUN] Would execute:")
+        print(' '.join(cmd))
+        return
+    
+    # Run training
+    os.chdir(project_root)
+    subprocess.run(cmd, check=True)
+
+
+def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_run=False, partition_override=None, qos_override=None):
     """Submit a SLURM job."""
-    script = generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override)
+    # Check if this is a GPT2 small model (use HuggingFace instead of flame)
+    if model_id.startswith('gpt2_small'):
+        script = generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, dry_run, partition_override, qos_override)
+    else:
+        script = generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, partition_override, qos_override)
     
     # Create temp directory for SLURM scripts
     slurm_dir = Path(flame_dir) / "slurm_scripts"
@@ -238,6 +410,11 @@ def submit_slurm_job(config, model_id, exp_name, slurm_profile, flame_dir, dry_r
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     script_path = slurm_dir / f"train_{model_id}_{timestamp}.sh"
+    
+    # For GPT2 small, exp_name is generated by the training script, not passed
+    if model_id.startswith('gpt2_small'):
+        # The training script generates its own exp_name, so we don't need to pass it
+        pass
     
     with open(script_path, 'w') as f:
         f.write(script)
@@ -292,6 +469,8 @@ Examples:
                        help="SLURM profile to use (lingo, vision, vision_h100)")
     parser.add_argument("--partition", type=str, default=None,
                        help="Override SLURM partition (e.g., vision-shared-h100)")
+    parser.add_argument("--qos", type=str, default="lingo-main",
+                       help="SLURM QoS (default: lingo-main, alternative: shared-if-available)")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
     parser.add_argument("--flame_dir", type=str, default=None, help="Path to flame directory")
     
@@ -371,7 +550,8 @@ Examples:
         submit_slurm_job(
             config, args.model, exp_name, 
             args.slurm_profile, flame_dir, args.dry_run,
-            partition_override=args.partition
+            partition_override=args.partition,
+            qos_override=args.qos
         )
     else:
         run_training(config, args.model, exp_name, flame_dir, args.dry_run)

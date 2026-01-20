@@ -129,20 +129,37 @@ def get_model_config_path(model_id, flame_dir):
 
 
 def find_checkpoints(exp_path):
-    """Find all available checkpoint steps."""
-    checkpoint_dir = os.path.join(exp_path, 'checkpoint')
-    if not os.path.exists(checkpoint_dir):
-        print(f"No checkpoint directory found at {checkpoint_dir}")
-        return []
+    """Find all available checkpoint steps.
     
+    Supports both flame format (checkpoint/step-{step}) and HuggingFace format (checkpoint-{step}).
+    """
+    # Try flame format first
+    checkpoint_dir = os.path.join(exp_path, 'checkpoint')
     steps = []
-    for name in os.listdir(checkpoint_dir):
-        if name.startswith('step-'):
-            try:
-                step = int(name.split('-')[1])
-                steps.append(step)
-            except ValueError:
-                continue
+    
+    if os.path.exists(checkpoint_dir):
+        # Flame format: checkpoint/step-{step}
+        for name in os.listdir(checkpoint_dir):
+            if name.startswith('step-'):
+                try:
+                    step = int(name.split('-')[1])
+                    steps.append(step)
+                except ValueError:
+                    continue
+    
+    # Try HuggingFace format: checkpoint-{step} directories in exp_path
+    if not steps:
+        for name in os.listdir(exp_path):
+            if name.startswith('checkpoint-'):
+                try:
+                    step = int(name.split('-')[1])
+                    steps.append(step)
+                except ValueError:
+                    continue
+    
+    if not steps:
+        print(f"No checkpoints found in {exp_path}")
+        return []
     
     return sorted(steps)
 
@@ -175,18 +192,33 @@ def load_fla_config(config_path):
 
 
 def convert_checkpoint(exp_path, step, config_path, tokenizer_path='gpt2'):
-    """Convert DCP checkpoint to HuggingFace format using working DCP load method."""
+    """Convert checkpoint to HuggingFace format.
+    
+    Supports both flame DCP format and HuggingFace format (no conversion needed).
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer
     
+    # Check if already in HuggingFace format (from HuggingFace Trainer)
+    hf_checkpoint = os.path.join(exp_path, f'checkpoint-{step}')
+    if os.path.exists(hf_checkpoint):
+        # Already in HuggingFace format, just return it
+        print(f"  Using HuggingFace checkpoint at {hf_checkpoint}")
+        return hf_checkpoint
+    
+    # Try flame DCP format
     checkpoint_dir = os.path.join(exp_path, f'checkpoint/step-{step}')
     hf_path = os.path.join(exp_path, f'hf-{step}')
+    
+    if not os.path.exists(checkpoint_dir):
+        print(f"  No checkpoint found for step {step}")
+        return None
     
     # Check if already converted
     if os.path.exists(hf_path) and os.path.exists(os.path.join(hf_path, 'model.safetensors')):
         print(f"  HF checkpoint already exists at {hf_path}")
         return hf_path
     
-    print(f"  Converting step {step} to HuggingFace format...")
+    print(f"  Converting step {step} from DCP to HuggingFace format...")
     
     os.makedirs(hf_path, exist_ok=True)
     
@@ -351,12 +383,15 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
         else:
             print("Warning: Could not auto-detect model type. Please specify --model")
     
-    # Get config path
-    if config_path is None and model_id:
+    # For GPT2 small models (HuggingFace), config_path is not needed
+    is_gpt2_small = model_id and model_id.startswith('gpt2_small')
+    
+    # Get config path (only needed for flame models)
+    if config_path is None and model_id and not is_gpt2_small:
         flame_dir = str(get_project_root() / "flame")
         config_path = get_model_config_path(model_id, flame_dir)
     
-    if config_path is None:
+    if config_path is None and not is_gpt2_small:
         raise ValueError("Could not determine model config. Please specify --config or --model")
     
     print("=" * 60)
@@ -436,12 +471,19 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
     for step in tqdm(eval_steps, desc="Evaluating checkpoints"):
         print(f"\n--- Step {step} ---")
         
-        # Convert checkpoint
-        hf_path = convert_checkpoint(exp_path, step, config_path)
-        
-        if hf_path is None:
-            print(f"  Skipping step {step} (conversion failed)")
-            continue
+        # Convert checkpoint (or use existing HuggingFace checkpoint)
+        if is_gpt2_small:
+            # GPT2 small uses HuggingFace format directly
+            hf_path = os.path.join(exp_path, f'checkpoint-{step}')
+            if not os.path.exists(hf_path):
+                print(f"  Checkpoint not found at {hf_path}")
+                continue
+        else:
+            # Flame models need conversion from DCP
+            hf_path = convert_checkpoint(exp_path, step, config_path)
+            if hf_path is None:
+                print(f"  Skipping step {step} (conversion failed)")
+                continue
         
         # Evaluate (pass pre-tokenized data)
         try:
