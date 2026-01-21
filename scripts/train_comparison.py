@@ -186,9 +186,6 @@ def generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, 
         f'--logging_steps {config.get("log_freq", 100)}',
     ])
     
-    if not config.get('enable_wandb', True):
-        cmd_parts.append('--nowandb')
-    
     train_cmd = ' \\\n  '.join(cmd_parts)
     
     script = f'''#!/bin/bash
@@ -215,8 +212,17 @@ def generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, 
 source {slurm_config["conda_source"]}
 conda activate {slurm_config["conda_env"]}
 
-# Install accelerate if not present (required for HuggingFace Trainer)
-pip install accelerate>=0.26.0 --quiet || true
+# Ensure CUDA libraries are found (fix for PyTorch CUDA detection)
+# PyTorch pip packages store CUDA libs in nvidia subdirectories
+NVIDIA_LIB=$CONDA_PREFIX/lib/python3.10/site-packages/nvidia
+export LD_LIBRARY_PATH=$NVIDIA_LIB/cuda_runtime/lib:$NVIDIA_LIB/cublas/lib:$NVIDIA_LIB/cudnn/lib:$NVIDIA_LIB/nvjitlink/lib:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+
+# Debug: Check GPU visibility
+echo "SLURM_JOB_GPUS: $SLURM_JOB_GPUS"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+nvidia-smi || echo "nvidia-smi failed"
+python3 -c "import torch; print(f'PyTorch CUDA check: available={{torch.cuda.is_available()}}, device_count={{torch.cuda.device_count()}}')"
 
 # Change to project root
 cd {project_root}
@@ -374,10 +380,6 @@ def run_gpt2_small_training(config, model_id, exp_name, dry_run=False):
     cmd.extend(['--save_steps', str(config.get('checkpoint_interval', 5000))])
     cmd.extend(['--eval_steps', str(config.get('checkpoint_interval', 5000))])
     cmd.extend(['--logging_steps', str(config.get('log_freq', 100))])
-    
-    # Wandb
-    if not config.get('enable_wandb', True):
-        cmd.append('--nowandb')
     
     print("=" * 60)
     print(f"Training: {config.get('name', model_id)}")

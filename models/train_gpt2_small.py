@@ -26,7 +26,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 
 import numpy as np
-import wandb
 
 from transformers import (
     GPT2LMHeadModel,
@@ -51,17 +50,36 @@ def get_project_root():
     return Path(__file__).parent.parent.resolve()
 
 
+def get_cache_dir():
+    """Get the cache directory for tokenized datasets."""
+    cache_dir = get_project_root() / "cache" / "tokenized"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 # -----------------------------------------------------------------------------
 # Dataset Classes
 # -----------------------------------------------------------------------------
 class WikiTextDataset(Dataset):
-    """WikiText-103 or WikiText-2 dataset for language modeling."""
+    """WikiText-103 or WikiText-2 dataset for language modeling with caching."""
     
-    def __init__(self, dataset_name, split, tokenizer, seq_len, num_workers=8):
+    def __init__(self, dataset_name, split, tokenizer, seq_len, num_workers=8, use_cache=True):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
+        self.samples = []
         
-        # Load dataset
+        # Try to load from cache
+        if use_cache:
+            cache_file = get_cache_dir() / f"{dataset_name}_{split}_seq{seq_len}.pt"
+            if cache_file.exists():
+                print(f"  Loading cached tokenized data from {cache_file}")
+                cached_data = torch.load(cache_file)
+                self.samples = cached_data["samples"]
+                print(f"  {split}: loaded {len(self.samples):,} samples from cache")
+                return
+        
+        # Load dataset from HuggingFace
+        print(f"  Loading {dataset_name} {split} split...")
         if dataset_name == "wikitext-103":
             data = datasets.load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
         elif dataset_name == "wikitext-2":
@@ -70,18 +88,27 @@ class WikiTextDataset(Dataset):
             raise ValueError(f"Unknown WikiText dataset: {dataset_name}")
         
         # Join all text
+        print(f"  Joining text...")
         text = " ".join(data["text"])
         
         # Tokenize
+        print(f"  Tokenizing (this may take a few minutes for wikitext-103)...")
         self.tokenizer.model_max_length = int(1e7)
-        self.token_ids = tokenizer.encode(text, add_special_tokens=False)
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
+        print(f"  Tokenized: {len(token_ids):,} tokens")
         
         # Create non-overlapping samples
-        self.samples = []
-        for i in range(0, len(self.token_ids) - seq_len, seq_len):
-            self.samples.append(self.token_ids[i:i+seq_len])
+        print(f"  Creating samples...")
+        for i in range(0, len(token_ids) - seq_len, seq_len):
+            self.samples.append(token_ids[i:i+seq_len])
         
-        print(f"  {split}: {len(self.token_ids):,} tokens -> {len(self.samples):,} samples")
+        print(f"  {split}: {len(token_ids):,} tokens -> {len(self.samples):,} samples")
+        
+        # Save to cache
+        if use_cache:
+            cache_file = get_cache_dir() / f"{dataset_name}_{split}_seq{seq_len}.pt"
+            print(f"  Saving to cache: {cache_file}")
+            torch.save({"samples": self.samples}, cache_file)
     
     def __len__(self):
         return len(self.samples)
@@ -92,9 +119,9 @@ class WikiTextDataset(Dataset):
 
 
 class OpenWebTextDataset(Dataset):
-    """OpenWebText dataset for language modeling."""
+    """OpenWebText dataset for language modeling with memory-efficient processing and caching."""
     
-    def __init__(self, split, tokenizer, seq_len, skip_samples=0, num_workers=8):
+    def __init__(self, split, tokenizer, seq_len, skip_samples=0, num_workers=8, use_cache=True, max_samples=None):
         """
         Args:
             split: 'train' or 'validation'
@@ -104,62 +131,131 @@ class OpenWebTextDataset(Dataset):
                          Training should skip first N samples (e.g., 10,000)
                          Validation uses first N samples (e.g., first 1,000 of 10,000)
             num_workers: Number of workers for tokenization
+            use_cache: Whether to use cached tokenized data
+            max_samples: Maximum number of samples to collect (None = no limit)
+                        For Chinchilla scaling: 103,700 steps * 64 batch = ~6.6M samples
         """
         self.tokenizer = tokenizer
         self.seq_len = seq_len
+        self.samples = []
         
         tokenizer.model_max_length = int(1e7)
+        
+        # Try to load from cache
+        max_str = f"_max{max_samples}" if max_samples else ""
+        cache_name = f"openwebtext_{split}_skip{skip_samples}_seq{seq_len}{max_str}"
+        if use_cache:
+            cache_file = get_cache_dir() / f"{cache_name}.pt"
+            if cache_file.exists():
+                print(f"  Loading cached tokenized data from {cache_file}")
+                cached_data = torch.load(cache_file)
+                self.samples = cached_data["samples"]
+                print(f"  {split}: loaded {len(self.samples):,} samples from cache")
+                return
         
         # Load OpenWebText with streaming for efficiency
         print(f"  Loading OpenWebText ({split} split)...")
         full_data = datasets.load_dataset("openwebtext", "plain_text", split="train", streaming=True)
+        
+        # Process in batches, creating samples on-the-fly to minimize memory usage
+        BATCH_SIZE = 5_000  # Process 5k documents at a time
+        token_buffer = []  # Buffer for incomplete sequences
         
         if split == "validation":
             # Validation uses first 1,000 samples (subset of skipped training samples)
             VALIDATION_SIZE = 1_000
             print(f"  Collecting first {VALIDATION_SIZE:,} samples for validation...")
             
-            texts = []
+            batch_texts = []
             for i, sample in enumerate(full_data):
-                if len(texts) >= VALIDATION_SIZE:
+                if i >= VALIDATION_SIZE:
                     break
-                texts.append(sample["text"])
+                batch_texts.append(sample["text"])
             
-            if len(texts) < VALIDATION_SIZE:
-                print(f"  Warning: Only collected {len(texts)} samples")
+            if len(batch_texts) < VALIDATION_SIZE:
+                print(f"  Warning: Only collected {len(batch_texts)} samples")
+            
+            # Tokenize validation batch (small enough to fit in memory)
+            print(f"  Tokenizing {len(batch_texts):,} validation documents...")
+            text = " ".join(batch_texts)
+            all_token_ids = tokenizer.encode(text, add_special_tokens=False)
+            
+            # Create samples
+            for i in range(0, len(all_token_ids) - seq_len, seq_len):
+                self.samples.append(all_token_ids[i:i+seq_len])
+            
+            print(f"  {split}: {len(all_token_ids):,} tokens -> {len(self.samples):,} samples")
             
         elif split == "train":
-            # Training skips first skip_samples, then collects all remaining samples
+            # Training skips first skip_samples, then processes in batches
+            # Memory-efficient: create samples as we go, don't accumulate all tokens
             print(f"  Skipping first {skip_samples:,} samples (reserved for validation)...")
-            print(f"  Collecting training samples (this may take a while)...")
+            if max_samples:
+                print(f"  Collecting up to {max_samples:,} samples...")
+            print(f"  Processing in batches of {BATCH_SIZE:,} documents...")
             
-            texts = []
+            batch_texts = []
             samples_seen = 0
+            batches_processed = 0
+            total_tokens = 0
+            done = False
+            
             for sample in full_data:
+                if done:
+                    break
+                    
                 samples_seen += 1
                 if samples_seen <= skip_samples:
                     continue  # Skip validation samples
-                texts.append(sample["text"])
                 
-                # Print progress every 100k samples
-                if len(texts) % 100_000 == 0:
-                    print(f"    Collected {len(texts):,} training samples...")
+                batch_texts.append(sample["text"])
+                
+                # Process batch when full
+                if len(batch_texts) >= BATCH_SIZE:
+                    text = " ".join(batch_texts)
+                    tokens = tokenizer.encode(text, add_special_tokens=False)
+                    
+                    # Add to buffer and extract complete samples
+                    token_buffer.extend(tokens)
+                    while len(token_buffer) >= seq_len:
+                        self.samples.append(token_buffer[:seq_len])
+                        token_buffer = token_buffer[seq_len:]
+                        
+                        # Check if we've reached max_samples
+                        if max_samples and len(self.samples) >= max_samples:
+                            done = True
+                            break
+                    
+                    total_tokens += len(tokens)
+                    batches_processed += 1
+                    batch_texts = []  # Clear for next batch
+                    
+                    if batches_processed % 20 == 0:
+                        print(f"    Processed {batches_processed * BATCH_SIZE:,} documents, "
+                              f"{total_tokens:,} tokens, {len(self.samples):,} samples...")
             
-            print(f"  Collected {len(texts):,} training samples total")
+            # Process remaining documents (only if not done)
+            if batch_texts and not done:
+                text = " ".join(batch_texts)
+                tokens = tokenizer.encode(text, add_special_tokens=False)
+                token_buffer.extend(tokens)
+                while len(token_buffer) >= seq_len:
+                    self.samples.append(token_buffer[:seq_len])
+                    token_buffer = token_buffer[seq_len:]
+                    if max_samples and len(self.samples) >= max_samples:
+                        break
+                total_tokens += len(tokens)
+            
+            print(f"  Processed {samples_seen - skip_samples:,} documents")
+            print(f"  {split}: {total_tokens:,} tokens -> {len(self.samples):,} samples")
         else:
             raise ValueError(f"Unknown split: {split}")
         
-        # Join all text and tokenize
-        print(f"  Tokenizing...")
-        text = " ".join(texts)
-        self.token_ids = tokenizer.encode(text, add_special_tokens=False)
-        
-        # Create non-overlapping samples
-        self.samples = []
-        for i in range(0, len(self.token_ids) - seq_len, seq_len):
-            self.samples.append(self.token_ids[i:i+seq_len])
-        
-        print(f"  {split}: {len(self.token_ids):,} tokens -> {len(self.samples):,} samples")
+        # Save to cache
+        if use_cache:
+            cache_file = get_cache_dir() / f"{cache_name}.pt"
+            print(f"  Saving to cache: {cache_file}")
+            torch.save({"samples": self.samples}, cache_file)
     
     def __len__(self):
         return len(self.samples)
@@ -180,13 +276,12 @@ def collate_fn(batch):
 # Trainer Callbacks
 # -----------------------------------------------------------------------------
 class PrintLossCallback(TrainerCallback):
-    """Callback to print and log training progress."""
+    """Callback to print training progress."""
     
-    def __init__(self, log_to_wandb=True):
+    def __init__(self):
         self.best_training_loss = float('inf')
         self.best_eval_loss = float('inf')
         self.last_eval_loss = None
-        self.log_to_wandb = log_to_wandb
     
     def on_log(self, args, state, control, logs=None, **kwargs):
         if state.global_step % 100 != 0:
@@ -231,16 +326,6 @@ class PrintLossCallback(TrainerCallback):
             out_str += f" | Eval Loss: {current_eval_loss:.4f} (Best: {self.best_eval_loss:.4f}, PPL: {eval_perplexity:.2f})"
         
         print(out_str, flush=True)
-        
-        # Log to wandb
-        if self.log_to_wandb and wandb.run is not None:
-            wandb.log({
-                "train/loss": current_loss,
-                "train/ppl": training_perplexity,
-                "eval/loss": current_eval_loss,
-                "eval/ppl": eval_perplexity,
-                "step": state.global_step,
-            })
 
 
 # -----------------------------------------------------------------------------
@@ -249,10 +334,32 @@ class PrintLossCallback(TrainerCallback):
 def main(args):
     set_seed(args.seed)
     
+    # Check CUDA availability with detailed diagnostics
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"PyTorch CUDA compiled: {torch.version.cuda}")
+    print(f"PyTorch built with CUDA: {torch.backends.cuda.is_built()}")
+    
+    # Try explicit CUDA initialization
+    try:
+        torch.cuda.init()
+        print("CUDA init() succeeded")
+    except Exception as e:
+        print(f"CUDA init() failed: {e}")
+    
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"GPU count: {torch.cuda.device_count()}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("WARNING: CUDA not available! Training on CPU will be very slow.")
+        print("Diagnostic info:")
+        print(f"  torch.backends.cudnn.is_available(): {torch.backends.cudnn.is_available()}")
+        import os
+        print(f"  CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+        print(f"  LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', 'not set')[:200]}...")
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}", flush=True)
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}", flush=True)
     
     # Generate experiment name and output directory
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -268,20 +375,11 @@ def main(args):
     print(f"Experiment: {exp_name}")
     print(f"Output directory: {output_dir}")
     
-    # Initialize wandb
-    if not args.nowandb:
-        wandb.init(
-            project="gpt2-small-comparison",
-            name=exp_name,
-            config=vars(args),
-            reinit=True,
-        )
-    
     # Load tokenizer
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.model_max_length = int(1e7)
     
-    # Load datasets
+    # Load datasets (with caching for WikiText)
     print("\nLoading datasets...")
     if args.dataset == "wikitext-103":
         train_dataset = WikiTextDataset(
@@ -290,6 +388,7 @@ def main(args):
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             num_workers=args.tokenize_workers,
+            use_cache=True,
         )
         eval_dataset = WikiTextDataset(
             dataset_name="wikitext-103",
@@ -297,6 +396,7 @@ def main(args):
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             num_workers=args.tokenize_workers,
+            use_cache=True,
         )
     elif args.dataset == "wikitext-2":
         train_dataset = WikiTextDataset(
@@ -305,6 +405,7 @@ def main(args):
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             num_workers=args.tokenize_workers,
+            use_cache=True,
         )
         eval_dataset = WikiTextDataset(
             dataset_name="wikitext-2",
@@ -312,14 +413,24 @@ def main(args):
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             num_workers=args.tokenize_workers,
+            use_cache=True,
         )
     elif args.dataset == "openwebtext":
+        # Calculate max samples needed for training
+        # Add 10% buffer to ensure we have enough samples for shuffling
+        if args.total_steps:
+            max_train_samples = int(args.total_steps * args.batch_size * 1.1)
+        else:
+            max_train_samples = None  # No limit if using epochs
+        
         train_dataset = OpenWebTextDataset(
             split="train",
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             skip_samples=args.skip_samples,
             num_workers=args.tokenize_workers,
+            use_cache=True,
+            max_samples=max_train_samples,
         )
         eval_dataset = OpenWebTextDataset(
             split="validation",
@@ -327,6 +438,7 @@ def main(args):
             seq_len=args.seq_len,
             skip_samples=0,  # Validation uses first samples
             num_workers=args.tokenize_workers,
+            use_cache=True,
         )
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
@@ -367,7 +479,6 @@ def main(args):
     print(f"\nModel: GPT2 Small")
     print(f"Parameters: {count_params(model)/1e6:.2f}M")
     print(f"Dropout: {args.dropout}")
-    print(f"Config: {config}")
     
     # Calculate training setup
     if args.total_steps:
@@ -412,7 +523,7 @@ def main(args):
         # Logging
         logging_steps=args.logging_steps,
         logging_dir=str(output_dir / "logs"),
-        report_to=["wandb"] if not args.nowandb else [],
+        report_to=[],  # No external logging (no wandb)
         
         # Other
         fp16=False,  # Use full precision for reproducibility
@@ -441,7 +552,7 @@ def main(args):
         eval_dataset=eval_dataset,
         data_collator=collate_fn,
         tokenizer=tokenizer,
-        callbacks=[PrintLossCallback(log_to_wandb=not args.nowandb)],
+        callbacks=[PrintLossCallback()],
     )
     
     # Remove default progress callback for cleaner output
@@ -465,10 +576,6 @@ def main(args):
     print(f"Checkpoints saved to: {output_dir}")
     print(f"Final model saved to: {final_path}")
     print("=" * 60)
-    
-    # Close wandb
-    if not args.nowandb and wandb.run is not None:
-        wandb.finish()
 
 
 def parse_args():
@@ -518,10 +625,6 @@ def parse_args():
                        help="Evaluate every N steps")
     parser.add_argument("--logging_steps", type=int, default=100,
                        help="Log every N steps")
-    
-    # Wandb
-    parser.add_argument("--nowandb", action="store_true",
-                       help="Disable wandb logging")
     
     # Misc
     parser.add_argument("--seed", type=int, default=42,
