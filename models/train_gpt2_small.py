@@ -365,7 +365,12 @@ def main(args):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dropout_str = f"drop{args.dropout}" if args.dropout > 0 else "nodrop"
     dataset_short = args.dataset.replace("-", "_")
-    exp_name = f"gpt2_small_{dataset_short}_{dropout_str}_{timestamp}"
+    
+    # Include job_id if provided (for SLURM jobs)
+    if args.job_id:
+        exp_name = f"gpt2_small_{dataset_short}_{dropout_str}_{args.job_id}"
+    else:
+        exp_name = f"gpt2_small_{dataset_short}_{dropout_str}_{timestamp}"
     
     # Save to flame/exp/ directory for consistency with other models
     project_root = get_project_root()
@@ -629,6 +634,8 @@ def parse_args():
     # Misc
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
+    parser.add_argument("--job_id", type=str, default=None,
+                       help="SLURM job ID (used in experiment name for tracking)")
     
     return parser.parse_args()
 
