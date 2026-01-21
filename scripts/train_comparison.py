@@ -184,6 +184,7 @@ def generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, 
         f'--save_steps {config.get("checkpoint_interval", 5000)}',
         f'--eval_steps {config.get("checkpoint_interval", 5000)}',
         f'--logging_steps {config.get("log_freq", 100)}',
+        '--job_id $SLURM_JOB_ID',  # Include SLURM job ID in experiment path
     ])
     
     train_cmd = ' \\\n  '.join(cmd_parts)

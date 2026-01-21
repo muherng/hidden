@@ -102,6 +102,27 @@ def detect_model_from_exp_path(exp_path):
             model_id_lower.replace("_", "-") in exp_name_lower):
             return model_id
     
+    # GPT2 small special case: match based on dataset and dropout pattern
+    # Exp names look like: gpt2_small_wikitext_103_drop0.1_281519 or gpt2_small_openwebtext_drop0.1_281519
+    if "gpt2_small" in exp_name_lower:
+        # Determine dataset
+        if "wikitext" in exp_name_lower:
+            dataset = "wikitext103"
+        elif "openwebtext" in exp_name_lower:
+            dataset = "openwebtext"
+        else:
+            dataset = "wikitext103"  # Default
+        
+        # Determine dropout (look for drop0.1, drop01, nodrop, etc.)
+        if "nodrop" in exp_name_lower or "drop0.0" in exp_name_lower or "drop0_0" in exp_name_lower:
+            dropout = "nodrop"
+        else:
+            dropout = "drop01"  # Default to dropout=0.1
+        
+        model_id = f"gpt2_small_{dataset}_{dropout}"
+        if model_id in registry["models"]:
+            return model_id
+    
     # Fallback: try to match model type (ordered from most specific to least specific)
     # Important: more specific types must come first to avoid partial matches
     model_types = ["gated_deltanet", "delta_net", "mamba2", "mamba", "hgrn2", "transformer", "gsa", "gla"]
