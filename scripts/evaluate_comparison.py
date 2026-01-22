@@ -633,6 +633,114 @@ def cleanup_hf_checkpoints(exp_path=None, cleanup_all=False):
         print("No cleanup path specified. Use --cleanup-all or --exp_path with --cleanup")
 
 
+def keep_best_and_final_checkpoints(exp_path, results=None):
+    """
+    Keep only the best (lowest perplexity) and final (highest step) checkpoints.
+    Deletes all other checkpoint-* and hf-* directories to save disk space.
+    
+    Args:
+        exp_path: Path to experiment directory
+        results: List of evaluation results (from evaluate_experiment). 
+                 If None, will try to load from eval_results.json.
+    """
+    import shutil
+    
+    # Load results if not provided
+    if results is None:
+        results_file = os.path.join(exp_path, 'eval_results.json')
+        if not os.path.exists(results_file):
+            print(f"Error: No eval_results.json found at {results_file}")
+            print("Please run evaluation first before cleaning up checkpoints.")
+            return
+        with open(results_file, 'r') as f:
+            data = json.load(f)
+            results = data.get('results', [])
+    
+    if not results:
+        print("No evaluation results found. Cannot determine best checkpoint.")
+        return
+    
+    # Find best (lowest perplexity) and final (highest step) checkpoints
+    best_result = min(results, key=lambda r: r['val_ppl'])
+    final_result = max(results, key=lambda r: r['step'])
+    
+    best_step = best_result['step']
+    final_step = final_result['step']
+    
+    print(f"\n" + "=" * 60)
+    print("Keeping Best and Final Checkpoints")
+    print("=" * 60)
+    print(f"Best checkpoint:  step {best_step} (PPL: {best_result['val_ppl']:.2f})")
+    print(f"Final checkpoint: step {final_step} (PPL: {final_result['val_ppl']:.2f})")
+    
+    keep_steps = {best_step, final_step}
+    
+    # Find all checkpoint directories (both flame and HuggingFace formats)
+    deleted_count = 0
+    freed_bytes = 0
+    
+    # Check for HuggingFace format: checkpoint-{step}
+    for item in os.listdir(exp_path):
+        if item.startswith('checkpoint-'):
+            try:
+                step = int(item.split('-')[1])
+                if step not in keep_steps:
+                    ckpt_path = os.path.join(exp_path, item)
+                    if os.path.isdir(ckpt_path):
+                        size = sum(os.path.getsize(os.path.join(dp, f))
+                                  for dp, dn, fn in os.walk(ckpt_path) for f in fn)
+                        shutil.rmtree(ckpt_path)
+                        freed_bytes += size
+                        deleted_count += 1
+                        print(f"  Deleted: {item}")
+            except (ValueError, IndexError):
+                continue
+    
+    # Check for flame format: checkpoint/step-{step}
+    checkpoint_dir = os.path.join(exp_path, 'checkpoint')
+    if os.path.exists(checkpoint_dir):
+        for item in os.listdir(checkpoint_dir):
+            if item.startswith('step-'):
+                try:
+                    step = int(item.split('-')[1])
+                    if step not in keep_steps:
+                        step_path = os.path.join(checkpoint_dir, item)
+                        if os.path.isdir(step_path):
+                            size = sum(os.path.getsize(os.path.join(dp, f))
+                                      for dp, dn, fn in os.walk(step_path) for f in fn)
+                            shutil.rmtree(step_path)
+                            freed_bytes += size
+                            deleted_count += 1
+                            print(f"  Deleted: checkpoint/{item}")
+                except (ValueError, IndexError):
+                    continue
+    
+    # Clean up hf-* directories for non-kept steps
+    for item in os.listdir(exp_path):
+        if item.startswith('hf-'):
+            try:
+                step = int(item.split('-')[1])
+                if step not in keep_steps:
+                    hf_path = os.path.join(exp_path, item)
+                    if os.path.isdir(hf_path):
+                        size = sum(os.path.getsize(os.path.join(dp, f))
+                                  for dp, dn, fn in os.walk(hf_path) for f in fn)
+                        shutil.rmtree(hf_path)
+                        freed_bytes += size
+                        deleted_count += 1
+                        print(f"  Deleted: {item}")
+            except (ValueError, IndexError):
+                continue
+    
+    print("=" * 60)
+    if deleted_count > 0:
+        print(f"Deleted {deleted_count} checkpoint directories, freed ~{freed_bytes / (1024**3):.2f} GB")
+    else:
+        print("No checkpoints needed to be deleted.")
+    print(f"Kept: step {best_step}" + (f" and step {final_step}" if final_step != best_step else " (also final)"))
+    print("=" * 60)
+
+
 def plot_results(experiments, output_path):
     """Plot validation curves for one or more experiments."""
     plt.figure(figsize=(12, 5))
@@ -785,6 +893,8 @@ Examples:
                        help="Delete hf-* checkpoint directories after evaluation to free disk space")
     parser.add_argument("--cleanup-all", action="store_true",
                        help="Delete all hf-* checkpoint directories across all experiments (frees ~151GB)")
+    parser.add_argument("--keep_best_final", action="store_true",
+                       help="After evaluation, delete all checkpoints except best (lowest PPL) and final")
     
     # Comparison mode
     parser.add_argument("--compare", type=str, nargs='+', 
@@ -802,7 +912,7 @@ Examples:
     if args.compare:
         compare_experiments(args.compare, args.compare_output)
     elif args.exp_path:
-        evaluate_experiment(
+        results = evaluate_experiment(
             args.exp_path,
             model_id=args.model,
             config_path=args.config,
@@ -813,6 +923,9 @@ Examples:
             output=args.output,
             cleanup=args.cleanup
         )
+        # Keep only best and final checkpoints if requested
+        if args.keep_best_final and results:
+            keep_best_and_final_checkpoints(args.exp_path, results)
     else:
         parser.error("Either --exp_path or --compare is required")
 

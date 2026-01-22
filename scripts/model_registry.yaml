@@ -97,6 +97,61 @@ models:
     description: "170M Gated DeltaNet GPT2-matched: expand_v=1, num_heads=12, tie_word_embeddings=true, no short_conv"
     # Uses flame defaults (lr=1e-3, etc.)
   
+  # ------------------------------------------
+  # GPT2-Hyperparameter Matched Runs (lr=1e-4, beta2=0.999, 30518 steps)
+  # ------------------------------------------
+  gla_170M_gpt2hparams:
+    name: "GLA-170M-GPT2-Hyperparams"
+    model_type: gla
+    config: configs/gla_170M_baseline.json
+    description: "170M GLA with GPT2-matched arch AND optimizer: lr=1e-4, beta2=0.999, wd=0.01, 30518 steps"
+    learning_rate: 1.0e-4
+    weight_decay: 0.01
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999
+    warmup_steps: 1000
+    total_steps: 30518
+    dropout: 0.1
+  
+  gla_170M_gpt2hparams_wd01:
+    name: "GLA-170M-GPT2-Hyperparams-WD0.1"
+    model_type: gla
+    config: configs/gla_170M_baseline.json
+    description: "170M GLA with GPT2-matched arch AND optimizer: lr=1e-4, beta2=0.999, wd=0.1, 30518 steps"
+    learning_rate: 1.0e-4
+    weight_decay: 0.1
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999
+    warmup_steps: 1000
+    total_steps: 30518
+    dropout: 0.1
+  
+  gated_deltanet_170M_gpt2hparams:
+    name: "Gated-DeltaNet-170M-GPT2-Hyperparams"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M_baseline.json
+    description: "170M Gated DeltaNet with GPT2-matched arch AND optimizer: lr=1e-4, beta2=0.999, wd=0.01, 30518 steps"
+    learning_rate: 1.0e-4
+    weight_decay: 0.01
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999
+    warmup_steps: 1000
+    total_steps: 30518
+    dropout: 0.1
+  
+  gated_deltanet_170M_gpt2hparams_wd01:
+    name: "Gated-DeltaNet-170M-GPT2-Hyperparams-WD0.1"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M_baseline.json
+    description: "170M Gated DeltaNet with GPT2-matched arch AND optimizer: lr=1e-4, beta2=0.999, wd=0.1, 30518 steps"
+    learning_rate: 1.0e-4
+    weight_decay: 0.1
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.999
+    warmup_steps: 1000
+    total_steps: 30518
+    dropout: 0.1
+  
   gated_deltanet_170M_fixed:
     name: "Gated-DeltaNet-170M-Fixed"
     model_type: gated_deltanet
