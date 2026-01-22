@@ -469,6 +469,7 @@ def main(args):
         initializer_range=0.02,
         bos_token_id=50256,
         eos_token_id=50256,
+        tie_word_embeddings=True,  # Match original GPT2 (tied input/output embeddings)
     )
     
     # Ensure we use standard attention (not flash attention)
