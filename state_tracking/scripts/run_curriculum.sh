@@ -35,8 +35,14 @@ BATCH_SIZE=32
 MIN_LEN=2
 MAX_LEN=18
 
+# Use SLURM job ID for unique checkpoint directory (prevents overwriting)
+CHECKPOINT_DIR="state_tracking/saved_models/job_${SLURM_JOB_ID}"
+mkdir -p "$CHECKPOINT_DIR"
+
 echo "============================================"
 echo "Curriculum Learning: max_len ${MIN_LEN} → ${MAX_LEN}"
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Checkpoint dir: ${CHECKPOINT_DIR}"
 echo "eval_loss_threshold: ${EVAL_LOSS_THRESHOLD}"
 echo "num_stories: ${NUM_STORIES}"
 echo "epochs: ${EPOCHS}"
@@ -79,7 +85,7 @@ for max_len in $(seq $MIN_LEN $MAX_LEN); do
         --batch_size $BATCH_SIZE \
         --no-early_stopping \
         --eval_loss_threshold $EVAL_LOSS_THRESHOLD \
-        --output_dir state_tracking/saved_models \
+        --output_dir $CHECKPOINT_DIR \
         --dataset_root state_tracking/datasets \
         $FROM_CKPT \
         $GENERATE
