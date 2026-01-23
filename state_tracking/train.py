@@ -28,6 +28,19 @@ from state_tracking.utils.model_utils import setup_tokenizer, setup_model
 from transformers import TrainerCallback
 from typing import Dict
 
+
+class EvalLossThresholdCallback(TrainerCallback):
+    """Callback to stop training when eval_loss falls below a threshold."""
+    def __init__(self, threshold):
+        self.threshold = threshold
+    
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        eval_loss = metrics.get("eval_loss", float("inf"))
+        if eval_loss < self.threshold:
+            print(f"eval_loss {eval_loss:.6f} < threshold {self.threshold}, stopping training")
+            control.should_training_stop = True
+
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
@@ -38,7 +51,8 @@ def parse_arguments():
         "EleutherAI/pythia-6.9B", "EleutherAI/pythia-12B","tree"
     ])
     parser.add_argument("--data_dir", type=str, default="data")
-    parser.add_argument("--output_dir", type=str, default="saved_models")
+    parser.add_argument("--output_dir", type=str, default="state_tracking/saved_models")
+    parser.add_argument("--dataset_root", type=str, default="state_tracking/datasets", help="Root directory for generated datasets")
     parser.add_argument("--num_items", type=int, default=3, choices=[3, 5], help="Number of items for permutation task")
     parser.add_argument("--supervision_type", type=str, default="direct_state", choices=["direct_state", "direct_topic", "next_token"])
     parser.add_argument("--layerwise_supervision_type", type=str, default=None, help="File containing layerwise supervision keys")
@@ -67,6 +81,7 @@ def parse_arguments():
     parser.add_argument("--T1_num_layers", type=int, default=1, help="Number of layers for T1 in the tree model")
     parser.add_argument("--T2_num_layers", type=int, default=1, help="Number of layers for T2 in the tree model")
     parser.add_argument("--eval_ratio", type=float, default=0.01, help="Ratio of dataset to use for evaluation (default: 0.01 or 1%)")
+    parser.add_argument("--eval_loss_threshold", type=float, default=None, help="Stop training if eval_loss falls below this threshold")
     return parser.parse_args()
 
 def setup_data_collator(args, tokenizer, state_tokens, parity=None, layerwise_supervision_config=None):
@@ -273,6 +288,9 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
     if args.early_stopping:
         trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=3))
     
+    if args.eval_loss_threshold is not None:
+        trainer.add_callback(EvalLossThresholdCallback(args.eval_loss_threshold))
+    
     return trainer
 
 #Length Generalization command
@@ -296,7 +314,7 @@ def main():
     os.makedirs(dummy_checkpoint, exist_ok=True)
     
     # Set up dataset directory based on max_len
-    dataset_dir = os.path.join("datasets_new", f"permutation_{args.num_items}_{args.max_len}")
+    dataset_dir = os.path.join(args.dataset_root, f"permutation_{args.num_items}_{args.max_len}")
     
     # If the dataset does not already exist, generate it using the simulation function:
     if not os.path.exists(dataset_dir) or args.generate_dataset:
@@ -321,16 +339,26 @@ def main():
     print('checkpoint_root:', checkpoint_root)
     if args.from_checkpoint is not None:
         if os.path.exists(checkpoint_root):
-            ckpt_subdirs = [d for d in os.listdir(checkpoint_root) if d.startswith("checkpoint-") and d.split("-")[-1].isdigit()]
-            print('ckpt_subdirs:', ckpt_subdirs)
-            if ckpt_subdirs:
-                latest_ckpt = max(ckpt_subdirs, key=lambda d: int(d.split("-")[-1]))
-                args.from_checkpoint = os.path.join(checkpoint_root, latest_ckpt)
+            # First check if model weights exist directly in checkpoint_root (saved by trainer.save_model)
+            if os.path.exists(os.path.join(checkpoint_root, "model.safetensors")) or \
+               os.path.exists(os.path.join(checkpoint_root, "pytorch_model.bin")):
+                print('Found model weights directly in checkpoint_root')
+                args.from_checkpoint = checkpoint_root
             else:
-                print('set to None because no checkpoint found')
-                args.from_checkpoint = None
+                # Fall back to looking for checkpoint subdirectories
+                ckpt_subdirs = [d for d in os.listdir(checkpoint_root) 
+                               if d.startswith("checkpoint-") and d.split("-")[-1].isdigit()
+                               and (os.path.exists(os.path.join(checkpoint_root, d, "model.safetensors")) or
+                                    os.path.exists(os.path.join(checkpoint_root, d, "pytorch_model.bin")))]
+                print('ckpt_subdirs with model weights:', ckpt_subdirs)
+                if ckpt_subdirs:
+                    latest_ckpt = max(ckpt_subdirs, key=lambda d: int(d.split("-")[-1]))
+                    args.from_checkpoint = os.path.join(checkpoint_root, latest_ckpt)
+                else:
+                    print('set to None because no checkpoint with model weights found')
+                    args.from_checkpoint = None
         else:
-            print('set to None because no checkpoint found 2')
+            print('set to None because checkpoint_root does not exist')
             args.from_checkpoint = None
     print('args.from_checkpoint:', args.from_checkpoint)
     # Set up determinism
@@ -402,7 +430,7 @@ def main():
             args.max_len = L
 
             # Build / generate the appropriate dataset directory
-            args.data_dir = os.path.join("datasets_new", f"permutation_{args.num_items}_{L}")
+            args.data_dir = os.path.join(args.dataset_root, f"permutation_{args.num_items}_{L}")
             if not os.path.exists(args.data_dir):
                 print("  ↳ dataset missing – generating once")
                 tmp_task = PermutationTask(num_items=args.num_items)
