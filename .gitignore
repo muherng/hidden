@@ -52,3 +52,15 @@ flame/**/*.pt
 flame/**/*.pkl
 flame/**/*.safetensors
 flame/slurm_scripts/
+
+# State tracking exclusions (large model files)
+state_tracking/saved_models/
+state_tracking/logs/
+
+# General large file patterns
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+!requirements*.txt

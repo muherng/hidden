@@ -176,7 +176,6 @@ def compute_metrics(eval_pred, compute_result=True):
     try:
         # For language modeling, predictions shape: (batch, seq_len, vocab_size)
         # labels shape: (batch, seq_len)
-        print(f"[compute_metrics] Predictions shape: {predictions.shape}, Labels shape: {labels.shape}")
         
         # Get predictions by argmax over vocab
         if isinstance(predictions, np.ndarray):
@@ -188,17 +187,12 @@ def compute_metrics(eval_pred, compute_result=True):
         preds = preds[:, :-1]  # Remove last prediction
         labels = labels[:, 1:]  # Remove first label
         
-        print(f"[compute_metrics] After shift - Preds shape: {preds.shape}, Labels shape: {labels.shape}")
-        print(f"[compute_metrics] Sample preds: {preds[0,:5]}, Sample labels: {labels[0,:5]}")
-        
         # Only compute error where labels != -100 (ignore index)
         mask = labels != -100
         errors = (preds != labels) & mask
         num_errors = errors.sum()
         num_total = mask.sum()
         error_rate = num_errors / num_total if num_total > 0 else 0.0
-        
-        print(f"[compute_metrics] Num errors: {num_errors}, Num total: {num_total}, Error rate: {error_rate:.4f}")
         
         # Compute cross entropy loss
         if isinstance(predictions, np.ndarray):
@@ -274,7 +268,7 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
     print(f"Batch eval metrics: {training_args.batch_eval_metrics}")
     print(f"Output directory: {args.output_dir}")
     
-    print("\nCreating trainer with compute_metrics function")
+    print("\nCreating trainer")
     trainer = Trainer(
         model=model,
         processing_class=tokenizer,  # Add processing_class
