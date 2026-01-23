@@ -287,6 +287,10 @@ def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, 
 source {slurm_config["conda_source"]}
 conda activate {slurm_config["conda_env"]}
 
+# Set wandb API key (read from ~/.netrc)
+export WANDB_API_KEY=$(grep -A2 'machine api.wandb.ai' ~/.netrc | grep password | awk '{{print $2}}')
+export WANDB_PROJECT="spd_icml"
+
 # Change to flame directory
 cd {slurm_config["working_dir"]}
 
