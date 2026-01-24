@@ -249,6 +249,31 @@ models:
     skip_samples: 10000  # Reserve first 10K samples for validation set
   
   # ------------------------------------------
+  # OpenWebText Training (Full Dataset ~8B tokens)
+  # ------------------------------------------
+  gated_deltanet_170M_baseline_shortconv_openwebtext:
+    name: "Gated-DeltaNet-170M-Baseline-ShortConv-OpenWebText"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M_baseline_shortconv.json
+    description: "170M Gated DeltaNet baseline + shortconv trained on full OpenWebText (~8B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text
+    dropout: 0.1
+    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
+  
+  gla_170M_baseline_shortconv_openwebtext:
+    name: "GLA-170M-Baseline-ShortConv-OpenWebText"
+    model_type: gla
+    config: configs/gla_170M_baseline_shortconv.json
+    description: "170M GLA baseline + shortconv trained on full OpenWebText (~8B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text
+    dropout: 0.1
+    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len)
+    skip_samples: 10000  # Reserve first 10K samples for validation set
+  
+  # ------------------------------------------
   # GPT2 Small (125M parameters)
   # ------------------------------------------
   gpt2_small_wikitext103_drop01:
