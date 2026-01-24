@@ -3,7 +3,8 @@ from torch.nn import CrossEntropyLoss
 from transformers import GPT2LMHeadModel, LlamaForCausalLM, GPTNeoXForCausalLM
 from transformers import AutoModelForCausalLM
 
-from state_tracking.utils.tree import TransformerScanModel 
+from state_tracking.utils.tree import TransformerScanModel, pad_to_chunk
+import torch 
 
 
 
@@ -152,17 +153,31 @@ class TreeModel(TransformerScanModel):
         attention_mask=None,
         labels=None,
         **kwargs):
+        # Save original sequence length for truncation after forward pass
+        orig_seq_len = input_ids.size(1)
+        
+        # Pad input_ids to be divisible by chunk_size
+        # Use pad_token_id=0 (will be masked in loss anyway)
+        if orig_seq_len % self.chunk_size != 0:
+            input_ids = pad_to_chunk(input_ids, self.chunk_size, pad_token_id=0, device=input_ids.device)
+            # Pad labels with -100 (CrossEntropyLoss ignore_index) so padded positions don't contribute to loss
+            if labels is not None:
+                labels = pad_to_chunk(labels, self.chunk_size, pad_token_id=-100, device=labels.device)
+        
         outputs = super().forward(input_ids, attention_mask=attention_mask, labels=None, output_hidden_states=True, return_dict=True)
-        loss = 0
-        loss_fct = nn.CrossEntropyLoss()
-
-        # final logits
-        final_logits = outputs["logits"]
+        
+        # Truncate logits back to original sequence length
+        final_logits = outputs["logits"][:, :orig_seq_len, :]
+        
+        loss_fct = nn.CrossEntropyLoss()  # ignore_index=-100 by default
         shift_logits = final_logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
+        # Use original labels (before padding) for loss computation
+        orig_labels = labels[:, :orig_seq_len] if labels is not None else None
+        shift_labels = orig_labels[..., 1:].contiguous()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         
-        # Return the loss in the outputs dictionary
+        # Update outputs with truncated logits and loss
+        outputs["logits"] = final_logits
         outputs["loss"] = loss
         return outputs
 
