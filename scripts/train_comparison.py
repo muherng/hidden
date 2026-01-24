@@ -84,12 +84,18 @@ def list_models(registry):
     print("=" * 80 + "\n")
 
 
-def generate_train_command(config, exp_name, flame_dir):
-    """Generate the training command for flame."""
+def generate_train_command(config, exp_name, flame_dir, use_shell_var=False):
+    """Generate the training command for flame.
+    
+    Args:
+        use_shell_var: If True, uses $EXP_NAME shell variable instead of hardcoded path.
+                       This is used in SLURM scripts to include job ID dynamically.
+    """
+    dump_folder = '$EXP_NAME' if use_shell_var else f'"{exp_name}"'
     cmd_parts = [
         f'NGPU=1 bash train.sh',
         f'--job.config_file flame/models/fla.toml',
-        f'--job.dump_folder "{exp_name}"',
+        f'--job.dump_folder {dump_folder}',
         f'--model.config "{config["config"]}"',
         f'--model.tokenizer_path {config["tokenizer"]}',
         f'--optimizer.name AdamW',
@@ -261,10 +267,20 @@ def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, 
     partition = partition_override if partition_override else slurm_config["partition"]
     qos = qos_override if qos_override else slurm_config["qos"]
     
-    train_cmd = generate_train_command(config, exp_name, flame_dir)
+    # Generate train command using shell variable for exp_name (to include job ID at runtime)
+    train_cmd = generate_train_command(config, exp_name, flame_dir, use_shell_var=True)
+    
+    # Determine dataset short name for job name
+    dataset_name = config.get('dataset', 'unknown')
+    if 'openwebtext' in dataset_name.lower():
+        dataset_short = 'owt'
+    elif 'wikitext' in dataset_name.lower():
+        dataset_short = 'wiki103'
+    else:
+        dataset_short = dataset_name[:8]
     
     script = f'''#!/bin/bash
-#SBATCH --job-name={model_id}-wiki103
+#SBATCH --job-name={model_id}-{dataset_short}
 #SBATCH --account={slurm_config["account"]}
 #SBATCH --partition={partition}
 #SBATCH --qos={qos}
@@ -287,15 +303,20 @@ def generate_slurm_script(config, model_id, exp_name, slurm_profile, flame_dir, 
 source {slurm_config["conda_source"]}
 conda activate {slurm_config["conda_env"]}
 
-# Set wandb API key (read from ~/.netrc)
-export WANDB_API_KEY=$(grep -A2 'machine api.wandb.ai' ~/.netrc | grep password | awk '{{print $2}}')
+# Set wandb API key (read from ~/.netrc - handles indented format)
+export WANDB_API_KEY=$(awk '/machine api.wandb.ai/{{getline; getline; print $2}}' ~/.netrc)
 export WANDB_PROJECT="spd_icml"
+# Use offline mode as fallback if no internet (will sync later)
+export WANDB_MODE=${{WANDB_MODE:-offline}}
 
 # Change to flame directory
 cd {slurm_config["working_dir"]}
 
 # Create logs directory
 mkdir -p logs
+
+# Construct experiment name with SLURM job ID appended
+EXP_NAME="{exp_name}_${{SLURM_JOB_ID}}"
 
 echo "============================================"
 echo "Training: {config.get('name', model_id)}"
@@ -308,14 +329,15 @@ echo "Seq Length: {config['seq_len']}"
 echo "Learning Rate: {config['learning_rate']}"
 echo "Warmup Steps: {config['warmup_steps']}"
 echo "Total Steps: {config['total_steps']}"
-echo "Output: {exp_name}"
+echo "Output: $EXP_NAME"
+echo "SLURM Job ID: $SLURM_JOB_ID"
 echo "============================================"
 
 {train_cmd}
 
 echo "============================================"
 echo "Training Complete!"
-echo "Checkpoint saved to: {exp_name}"
+echo "Checkpoint saved to: $EXP_NAME"
 echo "============================================"
 '''
     return script
@@ -550,7 +572,11 @@ Examples:
         if args.learning_rate is not None:
             suffix += f"_lr{config['learning_rate']}"
         
-        exp_name = f"exp/{args.model}_{dataset_short}_{dropout_str}{suffix}_{timestamp}"
+        # Avoid duplicating dataset name if already in model_id
+        if dataset_short.lower() in args.model.lower():
+            exp_name = f"exp/{args.model}_{dropout_str}{suffix}_{timestamp}"
+        else:
+            exp_name = f"exp/{args.model}_{dataset_short}_{dropout_str}{suffix}_{timestamp}"
     
     # Run or submit
     if args.submit:
