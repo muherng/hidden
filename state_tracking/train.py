@@ -297,8 +297,11 @@ def main():
     args = parse_arguments()
     print('args.chunk_size:', args.chunk_size)
     print('args.max_len:', args.max_len)
+    print('args.T1_num_layers:', args.T1_num_layers)
+    print('args.T2_num_layers:', args.T2_num_layers)
     root_output = args.output_dir
-    args.output_dir = args.output_dir + f"/{args.model}_{args.chunk_size}_{args.max_len}"
+    # Include T1/T2 layers in checkpoint naming to differentiate architectures
+    args.output_dir = args.output_dir + f"/{args.model}_c{args.chunk_size}_T1-{args.T1_num_layers}_T2-{args.T2_num_layers}_len{args.max_len}"
     
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
@@ -329,7 +332,7 @@ def main():
     # Now set args.data_dir to the dataset directory for prepare_dataset:
     args.data_dir = dataset_dir
     #Set args.from_checkpoint to the most recent checkpoint if available.
-    checkpoint_root = root_output + f"/{args.model}_{args.chunk_size}_{args.from_checkpoint}"
+    checkpoint_root = root_output + f"/{args.model}_c{args.chunk_size}_T1-{args.T1_num_layers}_T2-{args.T2_num_layers}_len{args.from_checkpoint}"
     print('checkpoint_root:', checkpoint_root)
     if args.from_checkpoint is not None:
         if os.path.exists(checkpoint_root):
