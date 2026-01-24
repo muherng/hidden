@@ -29,7 +29,7 @@ cd /data/lingo/morrisyau/hidden
 
 # Training parameters
 EVAL_LOSS_THRESHOLD=0.001
-NUM_STORIES=100000
+NUM_STORIES=1000000
 EPOCHS=10
 BATCH_SIZE=32
 MAX_LEN=18
@@ -42,6 +42,16 @@ T2_NUM_LAYERS=2
 # Use SLURM job ID for unique checkpoint directory (prevents overwriting)
 CHECKPOINT_DIR="state_tracking/saved_models/job_${SLURM_JOB_ID}"
 mkdir -p "$CHECKPOINT_DIR"
+
+# Function to count datapoints in existing dataset (train + test)
+count_datapoints() {
+    local dir="$1"
+    if [ -d "$dir/train" ]; then
+        find "$dir/train" "$dir/test" -name "*.json" 2>/dev/null | wc -l
+    else
+        echo 0
+    fi
+}
 
 # Curriculum: train on multiples of chunk_size (chunk_size, 2*chunk_size, ..., MAX_LEN)
 # For chunk_size=2, MAX_LEN=18: trains on 2,4,6,8,10,12,14,16,18
@@ -77,13 +87,21 @@ for max_len in $CURRICULUM_LENGTHS; do
         FROM_CKPT="--from_checkpoint $prev_len"
     fi
     
-    # Only generate dataset if it doesn't exist (never overwrite)
-    if [ ! -d "state_tracking/datasets/permutation_5_${max_len}" ]; then
+    # Check if dataset exists with sufficient datapoints
+    DATASET_DIR="state_tracking/datasets/permutation_5_${max_len}"
+    EXISTING_COUNT=$(count_datapoints "$DATASET_DIR")
+    
+    if [ $EXISTING_COUNT -lt $NUM_STORIES ]; then
+        if [ -d "$DATASET_DIR" ]; then
+            echo "Existing dataset has $EXISTING_COUNT < $NUM_STORIES datapoints, regenerating..."
+            rm -rf "$DATASET_DIR"
+        else
+            echo "Dataset not found, will generate $NUM_STORIES datapoints"
+        fi
         GENERATE="--generate_dataset"
-        echo "Dataset not found, will generate"
     else
+        echo "Dataset has $EXISTING_COUNT >= $NUM_STORIES datapoints, reusing"
         GENERATE=""
-        echo "Dataset exists at state_tracking/datasets/permutation_5_${max_len}, skipping generation"
     fi
     
     echo "FROM_CKPT: $FROM_CKPT"
