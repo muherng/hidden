@@ -34,7 +34,11 @@ EPOCHS=10
 BATCH_SIZE=32
 MIN_LEN=2
 MAX_LEN=18
+
+# Model architecture
 CHUNK_SIZE=2
+T1_NUM_LAYERS=2
+T2_NUM_LAYERS=2
 
 # Use SLURM job ID for unique checkpoint directory (prevents overwriting)
 CHECKPOINT_DIR="state_tracking/saved_models/job_${SLURM_JOB_ID}"
@@ -45,6 +49,8 @@ echo "Curriculum Learning: max_len ${MIN_LEN} → ${MAX_LEN}"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Checkpoint dir: ${CHECKPOINT_DIR}"
 echo "chunk_size: ${CHUNK_SIZE}"
+echo "T1_num_layers: ${T1_NUM_LAYERS}"
+echo "T2_num_layers: ${T2_NUM_LAYERS}"
 echo "eval_loss_threshold: ${EVAL_LOSS_THRESHOLD}"
 echo "num_stories: ${NUM_STORIES}"
 echo "epochs: ${EPOCHS}"
@@ -82,6 +88,8 @@ for max_len in $(seq $MIN_LEN $MAX_LEN); do
         --num_items 5 \
         --max_len $max_len \
         --chunk_size $CHUNK_SIZE \
+        --T1_num_layers $T1_NUM_LAYERS \
+        --T2_num_layers $T2_NUM_LAYERS \
         --num_stories $NUM_STORIES \
         --epochs $EPOCHS \
         --batch_size $BATCH_SIZE \
@@ -104,5 +112,5 @@ done
 echo ""
 echo "============================================"
 echo "Curriculum training complete!"
-echo "Final model saved to: ${CHECKPOINT_DIR}/tree_${CHUNK_SIZE}_${MAX_LEN}/"
+echo "Final model saved to: ${CHECKPOINT_DIR}/tree_c${CHUNK_SIZE}_T1-${T1_NUM_LAYERS}_T2-${T2_NUM_LAYERS}_len${MAX_LEN}/"
 echo "============================================"
