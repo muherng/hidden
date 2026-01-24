@@ -32,7 +32,6 @@ EVAL_LOSS_THRESHOLD=0.001
 NUM_STORIES=100000
 EPOCHS=10
 BATCH_SIZE=32
-MIN_LEN=2
 MAX_LEN=18
 
 # Model architecture
@@ -44,8 +43,15 @@ T2_NUM_LAYERS=2
 CHECKPOINT_DIR="state_tracking/saved_models/job_${SLURM_JOB_ID}"
 mkdir -p "$CHECKPOINT_DIR"
 
+# Curriculum: train on multiples of chunk_size (chunk_size, 2*chunk_size, ..., MAX_LEN)
+# For chunk_size=2, MAX_LEN=18: trains on 2,4,6,8,10,12,14,16,18
+# For chunk_size=1, MAX_LEN=18: trains on 1,2,3,...,18
+CURRICULUM_LENGTHS=$(seq $CHUNK_SIZE $CHUNK_SIZE $MAX_LEN)
+FIRST_LEN=$CHUNK_SIZE
+
 echo "============================================"
-echo "Curriculum Learning: max_len ${MIN_LEN} → ${MAX_LEN}"
+echo "Curriculum Learning: ${CHUNK_SIZE}, $((CHUNK_SIZE*2)), ... → ${MAX_LEN}"
+echo "Lengths: ${CURRICULUM_LENGTHS}"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Checkpoint dir: ${CHECKPOINT_DIR}"
 echo "chunk_size: ${CHUNK_SIZE}"
@@ -56,18 +62,18 @@ echo "num_stories: ${NUM_STORIES}"
 echo "epochs: ${EPOCHS}"
 echo "============================================"
 
-# Loop: max_len from MIN_LEN to MAX_LEN
-for max_len in $(seq $MIN_LEN $MAX_LEN); do
+# Loop: max_len as multiples of chunk_size
+for max_len in $CURRICULUM_LENGTHS; do
     echo ""
     echo "=========================================="
     echo "Training max_len = $max_len"
     echo "=========================================="
     
-    # Determine from_checkpoint argument
-    if [ $max_len -eq $MIN_LEN ]; then
+    # Determine from_checkpoint argument (previous length is max_len - chunk_size)
+    if [ $max_len -eq $FIRST_LEN ]; then
         FROM_CKPT=""
     else
-        prev_len=$((max_len - 1))
+        prev_len=$((max_len - CHUNK_SIZE))
         FROM_CKPT="--from_checkpoint $prev_len"
     fi
     

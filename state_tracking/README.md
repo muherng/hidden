@@ -13,17 +13,21 @@ cd /data/lingo/morrisyau/hidden  # Run all commands from hidden root
 
 ### Submit Curriculum Training (Recommended)
 
-Submit a SLURM job that trains on max_len 2 → 18 automatically:
+Submit a SLURM job that trains progressively on multiples of `chunk_size`:
 
 ```bash
 sbatch state_tracking/scripts/run_curriculum.sh
 ```
 
+**Curriculum sequence:** `chunk_size, 2*chunk_size, 3*chunk_size, ..., MAX_LEN`
+- For `CHUNK_SIZE=2`, `MAX_LEN=18`: trains on **2, 4, 6, 8, 10, 12, 14, 16, 18**
+- For `CHUNK_SIZE=1`, `MAX_LEN=18`: trains on **1, 2, 3, ..., 18**
+
 Edit `run_curriculum.sh` to configure:
-- `CHUNK_SIZE`: Tokens per chunk (1 or 2)
+- `CHUNK_SIZE`: Tokens per chunk (1 or 2) — also determines curriculum step size
 - `T1_NUM_LAYERS`: Layers in aggregation module (default: 2)
 - `T2_NUM_LAYERS`: Layers in prediction module (default: 2)
-- `MIN_LEN` / `MAX_LEN`: Curriculum range
+- `MAX_LEN`: Final curriculum length
 - `EVAL_LOSS_THRESHOLD`: Early stopping threshold
 - `NUM_STORIES`, `EPOCHS`, `BATCH_SIZE`: Training hyperparameters
 

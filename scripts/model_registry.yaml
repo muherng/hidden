@@ -111,6 +111,20 @@ models:
     description: "170M Gated DeltaNet baseline + use_short_conv=True"
     # Uses flame defaults (lr=1e-3, etc.)
   
+  gated_deltanet_145M_baseline_shortconv:
+    name: "Gated-DeltaNet-145M-Baseline-ShortConv"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_145M_baseline_shortconv.json
+    description: "~145M Gated DeltaNet (hidden_size=704, ~16% smaller than 170M)"
+    # Uses flame defaults (lr=1e-3, etc.)
+  
+  gated_deltanet_200M_baseline_shortconv:
+    name: "Gated-DeltaNet-200M-Baseline-ShortConv"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_200M_baseline_shortconv.json
+    description: "~200M Gated DeltaNet (hidden_size=832, ~17% larger than 170M)"
+    # Uses flame defaults (lr=1e-3, etc.)
+  
   # ------------------------------------------
   # GPT2-Hyperparameter Matched Runs (lr=1e-4, beta2=0.999, 30518 steps)
   # ------------------------------------------
