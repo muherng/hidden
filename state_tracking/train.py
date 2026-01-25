@@ -63,7 +63,7 @@ def parse_arguments():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--max_steps", type=int, default=-1)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate (default: 1e-3)")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
     parser.add_argument("--use_bfloat16", action="store_true", default=False, help="If true, uses bfloat16")
     parser.add_argument("--save_all_checkpoints", type=int, default=None, help="If set, saves checkpoints and interval specified in argument")
     parser.add_argument("--seed", type=int, default=42)
