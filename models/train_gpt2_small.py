@@ -39,6 +39,81 @@ from transformers import (
 
 import datasets
 
+# Note: We copy OnlineTokenizedIterableDataset from flame.data directly here
+# to avoid importing flame.data which has heavy dependencies (torchdata, etc.)
+from copy import deepcopy
+from datasets import IterableDataset
+
+
+class OnlineTokenizedIterableDataset(IterableDataset):
+    """
+    Copied from flame/flame/data.py to avoid dependency on torchdata.
+    
+    This class wraps an iterable dataset and tokenizes samples on-the-fly,
+    matching the exact behavior of flame's data handling.
+    """
+    def __init__(
+        self, dataset, tokenizer, seq_len: int = 2048, rank: int = 0, world_size: int = 1
+    ):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+
+        self.data = dataset.shard(world_size, rank)
+        self.seq_len = seq_len
+        self.rank = rank
+        self.world_size = world_size
+
+        self.states = None
+        self.tokens = []
+        self._epoch = 0  # Required by HuggingFace Trainer for iterable datasets
+    
+    def set_epoch(self, epoch: int):
+        """Set the epoch for the dataset (required by HuggingFace Trainer)."""
+        self._epoch = epoch
+        if hasattr(self.dataset, 'set_epoch'):
+            self.dataset.set_epoch(epoch)
+
+    def __iter__(self):
+        if self.states is not None:
+            self.data.load_state_dict(self.states)
+
+        while True:
+            for sample in self.tokenize(self.data):
+                # keep appending the samples to the token buffer
+                self.tokens += sample
+
+                while len(self.tokens) >= self.seq_len:
+                    input_ids = torch.tensor(self.tokens[:self.seq_len], dtype=torch.long)
+                    self.tokens = self.tokens[self.seq_len:]
+                    yield {'input_ids': input_ids}
+
+    def tokenize(self, data, buffer_size: int = 64):
+        buffer, states = [], []
+        for sample in data:
+            if sample.get('text', None) is not None:
+                buffer.append(sample['text'])
+            elif sample.get('content', None) is not None:
+                buffer.append(sample['content'])
+            else:
+                raise ValueError(f"No 'text' or 'content' field found in sample:\n{sample}")
+            states.append(self.data.state_dict())
+            if len(buffer) == buffer_size:
+                for s, tokenized in zip(states, self.tokenizer(buffer, return_attention_mask=False)['input_ids']):
+                    self.states = s
+                    yield tokenized
+                buffer, states = [], []
+        if len(buffer) > 0:
+            for s, tokenized in zip(states, self.tokenizer(buffer, return_attention_mask=False)['input_ids']):
+                self.states = s
+                yield tokenized
+
+    def state_dict(self):
+        return {'states': self.states, 'tokens': deepcopy(self.tokens)}
+
+    def load_state_dict(self, state_dict):
+        self.states = state_dict['states']
+        self.tokens = deepcopy(state_dict['tokens'])
+
 
 def count_params(model):
     """Count trainable parameters."""
@@ -273,6 +348,96 @@ def collate_fn(batch):
 
 
 # -----------------------------------------------------------------------------
+# Flame-Style Data Handling for Large Datasets (OpenWebText)
+# -----------------------------------------------------------------------------
+def build_openwebtext_train_dataset_flame_style(
+    tokenizer,
+    seq_len: int,
+    skip_samples: int = 10000,
+    seed: int = 42,
+    num_workers: int = 8,
+):
+    """
+    Build OpenWebText training dataset using flame's data handling.
+    
+    This matches the exact data processing used by flame models (GLA, Gated DeltaNet, etc.):
+    1. Load dataset without streaming
+    2. Shuffle with seed
+    3. Skip first N samples (reserved for validation)
+    4. Convert to iterable dataset
+    5. Wrap with OnlineTokenizedIterableDataset for on-the-fly tokenization
+    
+    Args:
+        tokenizer: GPT2 tokenizer
+        seq_len: Sequence length
+        skip_samples: Number of samples to skip (reserved for validation)
+        seed: Random seed for shuffling
+        num_workers: Number of workers for dataset sharding
+    
+    Returns:
+        OnlineTokenizedIterableDataset that tokenizes on-the-fly
+    """
+    from datasets import load_dataset
+    
+    print(f"  Loading OpenWebText dataset (flame-style)...")
+    print(f"  This may take a few minutes on first run...")
+    
+    # Load full dataset (not streaming - flame converts to iterable later)
+    # This matches flame's build_dataset() behavior
+    dataset = load_dataset(
+        "openwebtext", "plain_text", split="train",
+        num_proc=num_workers
+    )
+    
+    print(f"  Loaded {len(dataset):,} samples")
+    
+    # Shuffle with seed (same as flame)
+    print(f"  Shuffling dataset with seed {seed}...")
+    dataset = dataset.shuffle(seed=seed)
+    
+    # Skip first N samples (reserved for validation) - same as flame's skip_samples
+    if skip_samples > 0:
+        total_size = len(dataset)
+        if skip_samples >= total_size:
+            raise ValueError(
+                f"Cannot skip {skip_samples} samples from dataset with only {total_size} samples"
+            )
+        print(f"  Skipping first {skip_samples:,} samples (reserved for validation)")
+        dataset = dataset.select(range(skip_samples, total_size))
+    
+    print(f"  Training on {len(dataset):,} samples")
+    
+    # Convert to iterable dataset (same as flame)
+    # num_shards should match num_workers for efficient parallel loading
+    dataset = dataset.to_iterable_dataset(num_shards=num_workers)
+    
+    # Wrap with online tokenization (same as flame's build_dataloader)
+    # rank=0, world_size=1 for single GPU training
+    print(f"  Using online tokenization (flame-style, seq_len={seq_len})")
+    dataset = OnlineTokenizedIterableDataset(
+        dataset=dataset,
+        tokenizer=tokenizer,
+        seq_len=seq_len,
+        rank=0,
+        world_size=1,
+    )
+    
+    return dataset
+
+
+def flame_style_collate_fn(batch, tokenizer):
+    """
+    Collate function for flame-style iterable dataset.
+    Adds labels from input_ids (for causal LM training).
+    """
+    # OnlineTokenizedIterableDataset yields {'input_ids': tensor}
+    # We need to add labels for HuggingFace Trainer
+    input_ids = torch.stack([item["input_ids"] for item in batch])
+    labels = input_ids.clone()
+    return {"input_ids": input_ids, "labels": labels}
+
+
+# -----------------------------------------------------------------------------
 # Trainer Callbacks
 # -----------------------------------------------------------------------------
 class PrintLossCallback(TrainerCallback):
@@ -386,6 +551,8 @@ def main(args):
     
     # Load datasets (with caching for WikiText)
     print("\nLoading datasets...")
+    use_flame_style = False  # Flag to track if using flame-style iterable dataset
+    
     if args.dataset == "wikitext-103":
         train_dataset = WikiTextDataset(
             dataset_name="wikitext-103",
@@ -421,22 +588,19 @@ def main(args):
             use_cache=True,
         )
     elif args.dataset == "openwebtext":
-        # Calculate max samples needed for training
-        # Add 10% buffer to ensure we have enough samples for shuffling
-        if args.total_steps:
-            max_train_samples = int(args.total_steps * args.batch_size * 1.1)
-        else:
-            max_train_samples = None  # No limit if using epochs
+        # Use flame-style data handling for OpenWebText (large dataset)
+        # This matches the exact data processing used by flame models (GLA, Gated DeltaNet, etc.)
+        use_flame_style = True  # Flag to track flame-style dataset usage
         
-        train_dataset = OpenWebTextDataset(
-            split="train",
+        train_dataset = build_openwebtext_train_dataset_flame_style(
             tokenizer=tokenizer,
             seq_len=args.seq_len,
             skip_samples=args.skip_samples,
+            seed=args.seed,
             num_workers=args.tokenize_workers,
-            use_cache=True,
-            max_samples=max_train_samples,
         )
+        
+        # Keep validation dataset with caching (small enough: first 1K samples)
         eval_dataset = OpenWebTextDataset(
             split="validation",
             tokenizer=tokenizer,
@@ -448,6 +612,13 @@ def main(args):
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
     
+    # Print dataset info
+    if args.dataset == "openwebtext":
+        # Iterable dataset doesn't have len(), estimate from total_steps
+        estimated_samples = args.total_steps * args.batch_size if args.total_steps else "unknown"
+        print(f"Train samples: ~{estimated_samples:,} (streaming, flame-style)")
+        print(f"Eval samples: {len(eval_dataset):,}")
+    else:
     print(f"Train samples: {len(train_dataset):,}")
     print(f"Eval samples: {len(eval_dataset):,}")
     
@@ -550,13 +721,22 @@ def main(args):
     print(f"  Adam betas: ({args.adam_beta1}, {args.adam_beta2})")
     print(f"  BF16: {training_args.bf16}")
     
-    # Create trainer
+    # Create trainer with appropriate collate function
+    # For flame-style iterable dataset, use flame_style_collate_fn
+    # For map-style datasets (WikiText), use the standard collate_fn
+    if use_flame_style:
+        # Flame-style: OnlineTokenizedIterableDataset yields {'input_ids': tensor}
+        # Need to add labels for HuggingFace Trainer
+        data_collator_fn = lambda batch: flame_style_collate_fn(batch, tokenizer)
+    else:
+        data_collator_fn = collate_fn
+    
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=collate_fn,
+        data_collator=data_collator_fn,
         tokenizer=tokenizer,
         callbacks=[PrintLossCallback()],
     )
