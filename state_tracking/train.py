@@ -48,7 +48,8 @@ def parse_arguments():
         "gpt2", "gpt2-large", "gpt2-medium", "gpt2-xl", "distilgpt2",
         "EleutherAI/pythia-70M", "EleutherAI/pythia-160M", "EleutherAI/pythia-410M",
         "EleutherAI/pythia-1B", "EleutherAI/pythia-1.4B", "EleutherAI/pythia-2.8B",
-        "EleutherAI/pythia-6.9B", "EleutherAI/pythia-12B","tree"
+        "EleutherAI/pythia-6.9B", "EleutherAI/pythia-12B", "tree",
+        "gated_deltanet", "gla",  # fla linear attention models
     ])
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--output_dir", type=str, default="state_tracking/saved_models")
@@ -62,6 +63,7 @@ def parse_arguments():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--max_steps", type=int, default=-1)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate (default: 1e-3)")
     parser.add_argument("--use_bfloat16", action="store_true", default=False, help="If true, uses bfloat16")
     parser.add_argument("--save_all_checkpoints", type=int, default=None, help="If set, saves checkpoints and interval specified in argument")
     parser.add_argument("--seed", type=int, default=42)
@@ -81,6 +83,7 @@ def parse_arguments():
     parser.add_argument("--T1_num_layers", type=int, default=1, help="Number of layers for T1 in the tree model")
     parser.add_argument("--T2_num_layers", type=int, default=1, help="Number of layers for T2 in the tree model")
     parser.add_argument("--eval_ratio", type=float, default=0.01, help="Ratio of dataset to use for evaluation (default: 0.01 or 1%)")
+    parser.add_argument("--max_eval_samples", type=int, default=None, help="Maximum number of samples for evaluation (overrides eval_ratio if set)")
     parser.add_argument("--eval_loss_threshold", type=float, default=None, help="Stop training if eval_loss falls below this threshold")
     return parser.parse_args()
 
@@ -127,7 +130,13 @@ def prepare_dataset(args, tokenizer, state_tokens, data_collator, debug=False,tr
     # Split into train/test
     print(f"Loaded full dataset with {len(full_dataset)} samples")
     total_size = len(full_dataset)
-    train_size = int((1 - args.eval_ratio) * total_size)
+    
+    # Calculate eval size: use max_eval_samples if set, otherwise use eval_ratio
+    if args.max_eval_samples is not None:
+        eval_size = min(args.max_eval_samples, total_size - 1)  # Ensure at least 1 train sample
+    else:
+        eval_size = int(args.eval_ratio * total_size)
+    train_size = total_size - eval_size
     
     if args.full_determinism or args.data_determinism:
         # Use a fixed split by taking the first train_size examples for training
@@ -140,7 +149,7 @@ def prepare_dataset(args, tokenizer, state_tokens, data_collator, debug=False,tr
         torch.manual_seed(args.seed)
         train_dataset, eval_dataset = torch.utils.data.random_split(
             full_dataset, 
-            [train_size, total_size - train_size]
+            [train_size, eval_size]
         )
     print("Train dataset size:", len(train_dataset))
     print("Eval dataset size:", len(eval_dataset))
@@ -240,6 +249,7 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
         max_steps=args.max_steps,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
         save_steps=500 if not args.save_all_checkpoints else args.save_all_checkpoints,
         save_strategy="steps",
         save_total_limit=2,  # Keep only the last 2 checkpoints
@@ -263,6 +273,7 @@ def setup_trainer(args, model, tokenizer, train_dataset, eval_dataset, data_coll
     )
     
     print("\n=== Training Arguments ===")
+    print(f"Learning rate: {training_args.learning_rate}")
     print(f"Evaluation strategy: {training_args.eval_strategy}")
     print(f"Evaluation steps: {training_args.eval_steps}")
     print(f"Batch eval metrics: {training_args.batch_eval_metrics}")
