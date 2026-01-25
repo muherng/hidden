@@ -310,32 +310,40 @@ models:
     name: "GPT2-Small-125M-OpenWebText-Dropout0.1"
     model_type: transformer
     config: configs/gpt2_small.json
-    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with dropout=0.1"
+    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with canonical nanoGPT hyperparameters"
     dataset: openwebtext
-    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
-    learning_rate: 1.0e-4
-    weight_decay: 0.01  # Match WikiText/TransformerScanModel
-    warmup_steps: 1000  # Match WikiText/TransformerScanModel
+    dataset_name: plain_text
+    # Canonical nanoGPT/GPT-2 hyperparameters:
+    seq_len: 1024                  # Standard GPT-2 context length (was 512)
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 125M (was 1e-4)
+    weight_decay: 0.1              # Canonical (was 0.01)
+    warmup_steps: 2000             # ~1M tokens warmup (~0.5% of 8B)
     optimizer_beta1: 0.9
-    optimizer_beta2: 0.999  # Match WikiText/TransformerScanModel
-    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len) - FULL OpenWebText
-    skip_samples: 10000  # Reserve first 10K samples for validation set
+    optimizer_beta2: 0.95          # nanoGPT standard (was 0.999)
+    total_steps: 15259             # 8B tokens / 524,288 tokens per step
+    skip_samples: 10000            # Reserve first 10K samples for validation set
     dropout: 0.1
   
   gpt2_small_openwebtext_nodrop:
     name: "GPT2-Small-125M-OpenWebText-NoDropout"
     model_type: transformer
     config: configs/gpt2_small.json
-    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with dropout=0.0"
+    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with canonical nanoGPT hyperparameters, no dropout"
     dataset: openwebtext
-    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
-    learning_rate: 1.0e-4
-    weight_decay: 0.01  # Match WikiText/TransformerScanModel
-    warmup_steps: 1000  # Match WikiText/TransformerScanModel
+    dataset_name: plain_text
+    # Canonical nanoGPT/GPT-2 hyperparameters:
+    seq_len: 1024                  # Standard GPT-2 context length (was 512)
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 125M (was 1e-4)
+    weight_decay: 0.1              # Canonical (was 0.01)
+    warmup_steps: 2000             # ~1M tokens warmup (~0.5% of 8B)
     optimizer_beta1: 0.9
-    optimizer_beta2: 0.999  # Match WikiText/TransformerScanModel
-    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len) - FULL OpenWebText
-    skip_samples: 10000  # Reserve first 10K samples for validation set
+    optimizer_beta2: 0.95          # nanoGPT standard (was 0.999)
+    total_steps: 15259             # 8B tokens / 524,288 tokens per step
+    skip_samples: 10000            # Reserve first 10K samples for validation set
     dropout: 0.0
   
   # ------------------------------------------

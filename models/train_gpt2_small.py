@@ -665,6 +665,11 @@ def main(args):
         max_steps = -1
         num_train_epochs = args.epochs
     
+    # Calculate effective batch size in tokens for logging
+    tokens_per_step = args.batch_size * args.gradient_accumulation_steps * args.seq_len
+    print(f"\nEffective batch size: {tokens_per_step:,} tokens/step")
+    print(f"  = {args.batch_size} batch × {args.gradient_accumulation_steps} grad_accum × {args.seq_len} seq_len")
+    
     # Training arguments
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -672,7 +677,7 @@ def main(args):
         # Training parameters
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         
         # Steps/epochs
         max_steps=max_steps if max_steps > 0 else -1,
@@ -783,20 +788,22 @@ def parse_args():
                        help="Dropout rate (0.0 or 0.1)")
     
     # Training
-    parser.add_argument("--batch_size", type=int, default=64,
-                       help="Per-device batch size")
-    parser.add_argument("--seq_len", type=int, default=512,
-                       help="Sequence length")
-    parser.add_argument("--learning_rate", type=float, default=1e-4,
-                       help="Learning rate")
-    parser.add_argument("--weight_decay", type=float, default=0.01,
-                       help="Weight decay")
-    parser.add_argument("--warmup_steps", type=int, default=1000,
+    parser.add_argument("--batch_size", type=int, default=32,
+                       help="Per-device batch size (microbatch)")
+    parser.add_argument("--seq_len", type=int, default=1024,
+                       help="Sequence length (context window)")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=16,
+                       help="Gradient accumulation steps (effective batch = batch_size * grad_accum * seq_len)")
+    parser.add_argument("--learning_rate", type=float, default=6e-4,
+                       help="Learning rate (6e-4 canonical for 125M)")
+    parser.add_argument("--weight_decay", type=float, default=0.1,
+                       help="Weight decay (0.1 canonical)")
+    parser.add_argument("--warmup_steps", type=int, default=2000,
                        help="Warmup steps")
     parser.add_argument("--adam_beta1", type=float, default=0.9,
                        help="Adam beta1")
-    parser.add_argument("--adam_beta2", type=float, default=0.999,
-                       help="Adam beta2 (0.999 for HuggingFace default, 0.95 for nanoGPT)")
+    parser.add_argument("--adam_beta2", type=float, default=0.95,
+                       help="Adam beta2 (0.95 for nanoGPT canonical)")
     
     # Duration
     parser.add_argument("--total_steps", type=int, default=None,

@@ -171,14 +171,15 @@ def generate_gpt2_small_slurm_script(config, model_id, exp_name, slurm_profile, 
     
     cmd_parts.extend([
         f'--dropout {config.get("dropout", 0.0)}',
-        f'--learning_rate {config.get("learning_rate", 1e-4)}',
-        f'--weight_decay {config.get("weight_decay", 0.01)}',
-        f'--warmup_steps {config.get("warmup_steps", 1000)}',
-        f'--batch_size {config.get("batch_size", 64)}',
-        f'--seq_len {config.get("seq_len", 512)}',
+        f'--learning_rate {config.get("learning_rate", 6e-4)}',
+        f'--weight_decay {config.get("weight_decay", 0.1)}',
+        f'--warmup_steps {config.get("warmup_steps", 2000)}',
+        f'--batch_size {config.get("batch_size", 32)}',
+        f'--seq_len {config.get("seq_len", 1024)}',
+        f'--gradient_accumulation_steps {config.get("gradient_accumulation_steps", 16)}',
         f'--tokenize_workers {config.get("tokenize_workers", 8)}',
         f'--adam_beta1 {config.get("optimizer_beta1", 0.9)}',
-        f'--adam_beta2 {config.get("optimizer_beta2", 0.999)}',
+        f'--adam_beta2 {config.get("optimizer_beta2", 0.95)}',
     ])
     
     if config.get('total_steps'):
@@ -240,12 +241,15 @@ mkdir -p {flame_dir}/logs
 echo "============================================"
 echo "Training: {config.get('name', model_id)}"
 echo "============================================"
-echo "Using: HuggingFace Trainer"
+echo "Using: HuggingFace Trainer (canonical nanoGPT hyperparameters)"
 echo "Dataset: {config.get('dataset_name', config.get('dataset', 'unknown'))}"
-echo "Batch Size: {config.get('batch_size', 64)}"
-echo "Seq Length: {config.get('seq_len', 512)}"
-echo "Learning Rate: {config.get('learning_rate', 1e-4)}"
-echo "Warmup Steps: {config.get('warmup_steps', 1000)}"
+echo "Batch Size: {config.get('batch_size', 32)} (microbatch)"
+echo "Gradient Accumulation: {config.get('gradient_accumulation_steps', 16)}"
+echo "Seq Length: {config.get('seq_len', 1024)}"
+echo "Effective Tokens/Step: {config.get('batch_size', 32) * config.get('gradient_accumulation_steps', 16) * config.get('seq_len', 1024):,}"
+echo "Learning Rate: {config.get('learning_rate', 6e-4)}"
+echo "Weight Decay: {config.get('weight_decay', 0.1)}"
+echo "Warmup Steps: {config.get('warmup_steps', 2000)}"
 echo "Total Steps: {config.get('total_steps', 'N/A (using epochs)')}"
 echo "============================================"
 
@@ -386,16 +390,17 @@ def run_gpt2_small_training(config, model_id, exp_name, dry_run=False):
         if config.get('skip_samples'):
             cmd.extend(['--skip_samples', str(config['skip_samples'])])
     
-    # Hyperparameters
+    # Hyperparameters (nanoGPT canonical defaults)
     cmd.extend(['--dropout', str(config.get('dropout', 0.0))])
-    cmd.extend(['--learning_rate', str(config.get('learning_rate', 1e-4))])
-    cmd.extend(['--weight_decay', str(config.get('weight_decay', 0.01))])
-    cmd.extend(['--warmup_steps', str(config.get('warmup_steps', 1000))])
-    cmd.extend(['--batch_size', str(config.get('batch_size', 64))])
-    cmd.extend(['--seq_len', str(config.get('seq_len', 512))])
+    cmd.extend(['--learning_rate', str(config.get('learning_rate', 6e-4))])
+    cmd.extend(['--weight_decay', str(config.get('weight_decay', 0.1))])
+    cmd.extend(['--warmup_steps', str(config.get('warmup_steps', 2000))])
+    cmd.extend(['--batch_size', str(config.get('batch_size', 32))])
+    cmd.extend(['--seq_len', str(config.get('seq_len', 1024))])
+    cmd.extend(['--gradient_accumulation_steps', str(config.get('gradient_accumulation_steps', 16))])
     cmd.extend(['--tokenize_workers', str(config.get('tokenize_workers', 8))])
     cmd.extend(['--adam_beta1', str(config.get('optimizer_beta1', 0.9))])
-    cmd.extend(['--adam_beta2', str(config.get('optimizer_beta2', 0.999))])
+    cmd.extend(['--adam_beta2', str(config.get('optimizer_beta2', 0.95))])
     
     # Training steps
     if config.get('total_steps'):
