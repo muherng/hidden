@@ -474,6 +474,18 @@ class JobConfig:
                 0.0 means disabled (default). Typical values are 0.1 for regularization.
             """,
         )
+        self.parser.add_argument(
+            "--training.enable_qkv_dropout",
+            action="store_true",
+            default=False,
+            help="""
+                Enable dropout on Q/K/V projection outputs.
+                This is NOT in standard GPT2 (which applies dropout to attention weights).
+                Default is False to match GPT2 behavior more closely.
+                Set to True to experiment with Q/K/V dropout as an approximation
+                of attention weight dropout for linear attention models.
+            """,
+        )
         # metrics configs
         self.parser.add_argument(
             "--metrics.log_freq",

@@ -285,7 +285,12 @@ def main(job_config: JobConfig):
 
         # Apply dropout if configured (adds forward hooks to attention and MLP layers)
         if job_config.training.dropout > 0:
-            add_dropout_to_model(model, dropout_rate=job_config.training.dropout)
+            enable_qkv = getattr(job_config.training, 'enable_qkv_dropout', False)
+            add_dropout_to_model(
+                model, 
+                dropout_rate=job_config.training.dropout,
+                enable_qkv_dropout=enable_qkv,
+            )
 
         model_parts = [model]
 
