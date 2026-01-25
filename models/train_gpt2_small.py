@@ -619,8 +619,8 @@ def main(args):
         print(f"Train samples: ~{estimated_samples:,} (streaming, flame-style)")
         print(f"Eval samples: {len(eval_dataset):,}")
     else:
-    print(f"Train samples: {len(train_dataset):,}")
-    print(f"Eval samples: {len(eval_dataset):,}")
+        print(f"Train samples: {len(train_dataset):,}")
+        print(f"Eval samples: {len(eval_dataset):,}")
     
     # Create GPT2 small config (125M parameters)
     # Standard GPT2 small: 12 layers, 768 hidden, 12 heads

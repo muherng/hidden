@@ -139,6 +139,10 @@ def generate_train_command(config, exp_name, flame_dir, use_shell_var=False):
         f'--metrics.log_freq {config["log_freq"]}',
     ])
     
+    # Add enable_qkv_dropout if specified (for Q/K/V projection dropout experiment)
+    if config.get("enable_qkv_dropout", False):
+        cmd_parts.append('--training.enable_qkv_dropout')
+    
     if config.get("skip_nan_inf", True):
         cmd_parts.append('--training.skip_nan_inf')
     
