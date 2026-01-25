@@ -430,6 +430,20 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
         print("No checkpoints found!")
         return []
     
+    # Load existing results if present (for merging)
+    output_path = output or os.path.join(exp_path, 'eval_results.json')
+    existing_results = []
+    existing_steps = set()
+    if os.path.exists(output_path):
+        try:
+            with open(output_path, 'r') as f:
+                existing_data = json.load(f)
+                existing_results = existing_data.get('results', [])
+                existing_steps = {r['step'] for r in existing_results}
+                print(f"Found existing results with {len(existing_results)} checkpoints: {sorted(existing_steps)}")
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"Warning: Could not load existing results: {e}")
+    
     # Filter steps if specified
     if steps:
         eval_steps = [s for s in steps if s in available_steps]
@@ -439,7 +453,19 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
     else:
         eval_steps = available_steps
     
-    print(f"Evaluating {len(eval_steps)} checkpoints: {eval_steps}")
+    # Skip already-evaluated steps (merge mode)
+    new_eval_steps = [s for s in eval_steps if s not in existing_steps]
+    if len(new_eval_steps) < len(eval_steps):
+        skipped = sorted(set(eval_steps) - set(new_eval_steps))
+        print(f"Skipping {len(skipped)} already-evaluated steps: {skipped}")
+        eval_steps = new_eval_steps
+    
+    if not eval_steps:
+        print("All checkpoints already evaluated! Nothing to do.")
+        print("Use --steps to force re-evaluation of specific steps.")
+        return existing_results
+    
+    print(f"Evaluating {len(eval_steps)} NEW checkpoints: {eval_steps}")
     
     # Load and tokenize validation data ONCE before the loop
     print(f"\nLoading validation data for {dataset}...")
@@ -521,9 +547,19 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
             traceback.print_exc()
             continue
     
+    # Merge with existing results
+    all_results = existing_results + results
+    # Sort by step and remove duplicates (prefer new results)
+    seen_steps = set()
+    merged_results = []
+    for r in sorted(all_results, key=lambda x: x['step']):
+        if r['step'] not in seen_steps:
+            merged_results.append(r)
+            seen_steps.add(r['step'])
+    
     # Print summary
     print("\n" + "=" * 60)
-    print("Summary")
+    print("Summary (New Evaluations)")
     print("=" * 60)
     print(f"{'Step':>10} | {'Val Loss':>10} | {'Val PPL':>10}")
     print("-" * 36)
@@ -531,22 +567,25 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
         print(f"{r['step']:>10} | {r['val_loss']:>10.4f} | {r['val_ppl']:>10.2f}")
     print("=" * 60)
     
-    # Save results
-    output_path = output or os.path.join(exp_path, 'eval_results.json')
+    if existing_results:
+        print(f"\nMerged {len(results)} new + {len(existing_results)} existing = {len(merged_results)} total checkpoints")
+    
+    # Save merged results
     results_data = {
         'model': model_id,
         'config': config_path,
         'dataset': dataset,
-        'results': results
+        'results': merged_results
     }
     with open(output_path, 'w') as f:
         json.dump(results_data, f, indent=2)
     print(f"Results saved to: {output_path}")
     
-    # Plot validation curve
-    if results:
-        plot_results([{'name': model_id or 'Model', 'results': results}], 
+    # Plot validation curve (using merged results for full curve)
+    if merged_results:
+        plot_results([{'name': model_id or 'Model', 'results': merged_results}], 
                     os.path.join(exp_path, 'eval_curve.png'))
+        print(f"Plot saved to: {os.path.join(exp_path, 'eval_curve.png')}")
     
     # Clean up hf-* directories after evaluation if requested
     if cleanup:
@@ -555,7 +594,7 @@ def evaluate_experiment(exp_path, model_id=None, config_path=None, dataset='wiki
         print("=" * 60)
         cleanup_hf_checkpoints(exp_path=exp_path)
     
-    return results
+    return merged_results
 
 
 def cleanup_hf_checkpoints(exp_path=None, cleanup_all=False):
