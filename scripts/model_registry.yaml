@@ -230,23 +230,41 @@ models:
     name: "Gated-DeltaNet-170M-OpenWebText"
     model_type: gated_deltanet
     config: configs/gated_deltanet_170M.json
-    description: "170M Gated DeltaNet model (original config, head_dim=128) trained on OpenWebText with dropout=0.1 (Chinchilla scaling: 3.4B tokens)"
+    description: "170M Gated DeltaNet trained on full OpenWebText (~8B tokens) with canonical nanoGPT hyperparameters"
     dataset: openwebtext
-    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dataset_name: plain_text
+    # Canonical nanoGPT/GPT-2 hyperparameters (matching GPT2-small for fair comparison):
+    seq_len: 1024                  # Standard GPT-2 context length
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 125M-170M models
+    weight_decay: 0.1              # Canonical
+    warmup_steps: 2000             # ~1M tokens warmup
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95          # nanoGPT standard
+    total_steps: 15259             # 8B tokens / 524,288 tokens per step
+    skip_samples: 10000            # Reserve first 10K samples for validation set
     dropout: 0.1
-    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
-    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   gated_deltanet_170M_openwebtext_nodrop:
     name: "Gated-DeltaNet-170M-OpenWebText-NoDropout"
     model_type: gated_deltanet
     config: configs/gated_deltanet_170M.json
-    description: "170M Gated DeltaNet model (original config, head_dim=128) trained on OpenWebText with dropout=0.0 (Chinchilla scaling: 3.4B tokens)"
+    description: "170M Gated DeltaNet trained on full OpenWebText (~8B tokens) with canonical nanoGPT hyperparameters, no dropout"
     dataset: openwebtext
-    dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
+    dataset_name: plain_text
+    # Canonical nanoGPT/GPT-2 hyperparameters (matching GPT2-small for fair comparison):
+    seq_len: 1024                  # Standard GPT-2 context length
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 125M-170M models
+    weight_decay: 0.1              # Canonical
+    warmup_steps: 2000             # ~1M tokens warmup
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95          # nanoGPT standard
+    total_steps: 15259             # 8B tokens / 524,288 tokens per step
+    skip_samples: 10000            # Reserve first 10K samples for validation set
     dropout: 0.0
-    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
-    skip_samples: 10000  # Reserve first 10K samples for validation set
   
   # ------------------------------------------
   # OpenWebText Training (Full Dataset ~8B tokens)
