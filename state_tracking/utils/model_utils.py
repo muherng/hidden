@@ -1,6 +1,9 @@
 """
 Common model utilities for setting up tokenizers and models.
 """
+# Import fla FIRST to register gated_deltanet, gla, etc. with AutoConfig/AutoModel
+import fla  # noqa
+
 from transformers import (
     AutoTokenizer,
     AutoConfig,
@@ -102,6 +105,64 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
             else: 
                 model = TreeModel(config, chunk_size=chunk_size,
                                             T1_num_layers=T1_num_layers, T2_num_layers=T2_num_layers)
+        elif model_name.lower() in ["gated_deltanet", "gla"]:
+            # Load fla model from state_tracking config (NOT flame/configs)
+            config_path = f"state_tracking/configs/{model_name.lower()}_170M.json"
+            print(f"Loading fla model config from: {config_path}")
+            
+            model_config = AutoConfig.from_pretrained(config_path)
+            # Disable fused cross entropy since we handle loss ourselves
+            model_config.fuse_cross_entropy = False
+            if hasattr(model_config, 'fuse_linear_cross_entropy'):
+                model_config.fuse_linear_cross_entropy = False
+            
+            if checkpoint_path:
+                print(f"Loading fla model from checkpoint: {checkpoint_path}")
+                model = AutoModelForCausalLM.from_pretrained(
+                    checkpoint_path,
+                    config=model_config,
+                    ignore_mismatched_sizes=True
+                )
+            else:
+                print("Creating new fla model from config")
+                model = AutoModelForCausalLM.from_config(model_config)
+            
+            # Resize token embeddings to match tokenizer
+            model.resize_token_embeddings(len(tokenizer))
+            
+            # Wrap forward to handle direct supervision (same pattern as GPT2)
+            original_forward = model.forward
+            def new_forward(input_ids, attention_mask=None, labels=None, **kwargs):
+                outputs = original_forward(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=None,  # Don't pass labels to base model
+                    output_hidden_states=True,
+                    return_dict=True,
+                    **kwargs
+                )
+                
+                if labels is not None:
+                    # Shift labels and logits for direct supervision
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    
+                    # Compute loss
+                    loss_fct = CrossEntropyLoss()
+                    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                    
+                    outputs.loss = loss
+                    outputs['loss'] = loss
+                    
+                return outputs
+            model.forward = new_forward
+            
+            # Move to device and set precision
+            if use_bfloat16:
+                model = model.to(torch.bfloat16)
+            model = model.to("cuda")
+            
+            return model  # Early return since we've handled everything
         elif "mamba" in model_name.lower():
             if checkpoint_path:
                 print(f"Loading Mamba model from checkpoint: {checkpoint_path}")
