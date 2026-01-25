@@ -310,15 +310,15 @@ models:
     name: "GPT2-Small-125M-OpenWebText-Dropout0.1"
     model_type: transformer
     config: configs/gpt2_small.json
-    description: "125M GPT2 small model trained on OpenWebText with dropout=0.1 (Chinchilla scaling: 3.4B tokens, best practice hyperparameters)"
+    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with dropout=0.1"
     dataset: openwebtext
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     learning_rate: 1.0e-4
-    weight_decay: 0.1  # Best practice (nanoGPT)
-    warmup_steps: 2000  # Best practice (nanoGPT)
+    weight_decay: 0.01  # Match WikiText/TransformerScanModel
+    warmup_steps: 1000  # Match WikiText/TransformerScanModel
     optimizer_beta1: 0.9
-    optimizer_beta2: 0.95  # Best practice (nanoGPT, flame default)
-    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    optimizer_beta2: 0.999  # Match WikiText/TransformerScanModel
+    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len) - FULL OpenWebText
     skip_samples: 10000  # Reserve first 10K samples for validation set
     dropout: 0.1
   
@@ -326,15 +326,15 @@ models:
     name: "GPT2-Small-125M-OpenWebText-NoDropout"
     model_type: transformer
     config: configs/gpt2_small.json
-    description: "125M GPT2 small model trained on OpenWebText with dropout=0.0 (Chinchilla scaling: 3.4B tokens, best practice hyperparameters)"
+    description: "125M GPT2 small model trained on full OpenWebText (~8B tokens) with dropout=0.0"
     dataset: openwebtext
     dataset_name: plain_text  # OpenWebText uses 'plain_text' config, not 'default'
     learning_rate: 1.0e-4
-    weight_decay: 0.1  # Best practice (nanoGPT)
-    warmup_steps: 2000  # Best practice (nanoGPT)
+    weight_decay: 0.01  # Match WikiText/TransformerScanModel
+    warmup_steps: 1000  # Match WikiText/TransformerScanModel
     optimizer_beta1: 0.9
-    optimizer_beta2: 0.95  # Best practice (nanoGPT, flame default)
-    total_steps: 103700  # 3.4B tokens / (64 batch_size * 512 seq_len)
+    optimizer_beta2: 0.999  # Match WikiText/TransformerScanModel
+    total_steps: 244140  # ~8B tokens / (64 batch_size * 512 seq_len) - FULL OpenWebText
     skip_samples: 10000  # Reserve first 10K samples for validation set
     dropout: 0.0
   
@@ -375,6 +375,35 @@ models:
   # ------------------------------------------
   # Mamba2
   # ------------------------------------------
+  mamba2_170M:
+    name: "Mamba2-170M"
+    model_type: mamba2
+    config: configs/mamba2_170M.json
+    description: "~170M parameter Mamba2 model (GPT2-matched: hidden_size=768, 24 layers)"
+    # Uses all defaults
+  
+  mamba2_170M_openwebtext:
+    name: "Mamba2-170M-OpenWebText"
+    model_type: mamba2
+    config: configs/mamba2_170M.json
+    description: "~170M Mamba2 trained on full OpenWebText (~8B tokens)"
+    dataset: openwebtext
+    dataset_name: plain_text
+    dropout: 0.1
+    total_steps: 244140
+    skip_samples: 10000
+  
+  mamba2_170M_openwebtext_nodrop:
+    name: "Mamba2-170M-OpenWebText-NoDropout"
+    model_type: mamba2
+    config: configs/mamba2_170M.json
+    description: "~170M Mamba2 trained on full OpenWebText (~8B tokens) without dropout"
+    dataset: openwebtext
+    dataset_name: plain_text
+    dropout: 0.0
+    total_steps: 244140
+    skip_samples: 10000
+  
   mamba2_340M:
     name: "Mamba2-340M"
     model_type: mamba2
