@@ -220,7 +220,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     vocab_size=tokenizer.vocab_size,
                     n_positions=4096,
                     n_embd=768,
-                    n_layer=6,
+                    n_layer=12,
                     n_head=12,
                     dropout=0.1,
                     return_dict=True,
@@ -381,7 +381,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                 vocab_size=len(tokenizer),  # Use the actual tokenizer size
                 n_positions=4096,
                 n_embd=768,
-                n_layer=6,
+                n_layer=12,
                 n_head=12,
                 dropout=0.1,
                 return_dict=True,
@@ -443,7 +443,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     vocab_size=len(tokenizer),  # Use the actual tokenizer size
                     n_positions=4096,
                     n_embd=768,
-                    n_layer=6,
+                    n_layer=12,
                     n_head=12,
                     dropout=0.1,
                     return_dict=True,
@@ -500,7 +500,7 @@ def setup_model(tokenizer, model_name=None, checkpoint_path=None, use_bfloat16=F
                     vocab_size=len(tokenizer),  # Use the actual tokenizer size
                     n_positions=4096,
                     n_embd=768,
-                    n_layer=6,
+                    n_layer=12,
                     n_head=12,
                     dropout=0.1,
                     return_dict=True,
