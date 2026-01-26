@@ -346,6 +346,49 @@ models:
     total_steps: 30518  # 10 epochs × 100M tokens / (64 batch_size * 512 seq_len) = 1B tokens / 32,768
     dropout: 0.0
   
+  # ------------------------------------------
+  # WikiText-103 with Canonical nanoGPT Hyperparameters
+  # (Same hyperparameters as OpenWebText runs for fair comparison)
+  # ------------------------------------------
+  gpt2_small_wikitext103_canonical:
+    name: "GPT2-Small-WikiText103-Canonical"
+    model_type: transformer
+    config: configs/gpt2_small.json
+    description: "GPT2-small on WikiText-103 with canonical nanoGPT hyperparameters (20 epochs, ~2B tokens)"
+    dataset: wikitext
+    dataset_name: wikitext-103-raw-v1
+    # Canonical nanoGPT/GPT-2 hyperparameters (matching OpenWebText runs):
+    seq_len: 1024                  # Standard GPT-2 context length
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 125M models
+    weight_decay: 0.1              # Canonical
+    warmup_steps: 200              # Scaled: 2000 × (103M/8B) ≈ 200
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95          # nanoGPT standard
+    total_steps: 3815              # 20 epochs × 103M / 524,288 tokens/step
+    dropout: 0.1
+
+  gated_deltanet_170M_wikitext103_canonical:
+    name: "Gated-DeltaNet-170M-WikiText103-Canonical"
+    model_type: gated_deltanet
+    config: configs/gated_deltanet_170M.json
+    description: "Gated DeltaNet on WikiText-103 with canonical nanoGPT hyperparameters (20 epochs, ~2B tokens)"
+    dataset: wikitext
+    dataset_name: wikitext-103-raw-v1
+    # Canonical nanoGPT/GPT-2 hyperparameters (matching OpenWebText runs):
+    seq_len: 1024                  # Standard GPT-2 context length
+    batch_size: 32                 # Microbatch size
+    gradient_accumulation_steps: 16  # 32 * 16 * 1024 = 524,288 tokens/step
+    learning_rate: 6.0e-4          # Canonical for 170M models
+    weight_decay: 0.1              # Canonical
+    warmup_steps: 200              # Scaled: 2000 × (103M/8B) ≈ 200
+    optimizer_beta1: 0.9
+    optimizer_beta2: 0.95          # nanoGPT standard
+    total_steps: 3815              # 20 epochs × 103M / 524,288 tokens/step
+    dropout: 0.1
+    enable_qkv_dropout: false      # Match GPT2 (no Q/K/V dropout)
+
   gpt2_small_openwebtext_drop01:
     name: "GPT2-Small-125M-OpenWebText-Dropout0.1"
     model_type: transformer

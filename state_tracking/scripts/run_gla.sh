@@ -29,7 +29,7 @@ NUM_STORIES=1000000
 MAX_EVAL_SAMPLES=1000
 EPOCHS=1
 BATCH_SIZE=32
-LEARNING_RATE=1e-3
+LEARNING_RATE=3e-3
 
 # Use SLURM job ID for unique checkpoint directory
 CHECKPOINT_DIR="state_tracking/saved_models/job_${SLURM_JOB_ID}"
