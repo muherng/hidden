@@ -368,6 +368,7 @@ models:
     optimizer_beta2: 0.95          # nanoGPT standard
     total_steps: 3815              # 20 epochs × 103M / 524,288 tokens/step
     dropout: 0.1
+    checkpoint_interval: 500       # More frequent for shorter runs (8 checkpoints)
 
   gated_deltanet_170M_wikitext103_canonical:
     name: "Gated-DeltaNet-170M-WikiText103-Canonical"
@@ -387,6 +388,7 @@ models:
     optimizer_beta2: 0.95          # nanoGPT standard
     total_steps: 3815              # 20 epochs × 103M / 524,288 tokens/step
     dropout: 0.1
+    checkpoint_interval: 500       # More frequent for shorter runs (8 checkpoints)
     enable_qkv_dropout: false      # Match GPT2 (no Q/K/V dropout)
 
   gpt2_small_openwebtext_drop01:

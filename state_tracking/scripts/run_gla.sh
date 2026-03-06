@@ -19,7 +19,7 @@ export WANDB_MODE=disabled
 source /data/lingo/morrisyau/miniforge3/etc/profile.d/conda.sh
 conda activate fla2
 
-cd /data/lingo/morrisyau/hidden
+cd "$(cd "$(dirname "$0")/../.." && pwd)"
 
 # Training parameters
 MODEL="gla"
