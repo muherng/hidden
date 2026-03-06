@@ -1,94 +1,27 @@
-# Tree Model Training for Permutation Tasks
+# State Tracking Experiments
 
-This module trains Tree Models on S5 permutation tasks with curriculum learning.
+This module runs state tracking experiments on the S5 permutation task with curriculum learning (or single-length training). Supported models: **TransformerScanModel (tree)**, **GPT-2**, **Gated DeltaNet**, and **Gated Linear Attention (GLA)**.
 
-## Quick Start
+## Prerequisites
 
-### Prerequisites
+- Python and Conda. Run all commands from the **repository root** (the directory that contains `state_tracking/`).
+- **Conda environments:** use `base` for the tree model; use `fla2` (or an environment with the same dependencies) for GPT-2, Gated DeltaNet, and GLA. The scripts source conda and activate these envs by default; on a different machine, either activate the correct env before running or edit the `source` and `conda activate` lines in the script.
 
-```bash
-conda activate base  # Uses hidden/base.yml environment
-cd /data/lingo/morrisyau/hidden  # Run all commands from hidden root
-```
+## Reproducing Experiments
 
-### Submit Curriculum Training (Recommended)
+### TransformerScanModel (tree)
 
-Submit a SLURM job that trains progressively on multiples of `chunk_size`:
+**Recommended:** run the curriculum script (SLURM or locally):
 
 ```bash
 sbatch state_tracking/scripts/run_curriculum.sh
+# Or locally:
+bash state_tracking/scripts/run_curriculum.sh
 ```
 
-**Curriculum sequence:** `chunk_size, 2*chunk_size, 3*chunk_size, ..., MAX_LEN`
-- For `CHUNK_SIZE=2`, `MAX_LEN=18`: trains on **2, 4, 6, 8, 10, 12, 14, 16, 18**
-- For `CHUNK_SIZE=1`, `MAX_LEN=18`: trains on **1, 2, 3, ..., 18**
+**Curriculum sequence:** `chunk_size`, `2*chunk_size`, … → `MAX_LEN` (e.g. for `CHUNK_SIZE=1`, `MAX_LEN=18`: lengths 1, 2, …, 18). Edit `run_curriculum.sh` for `CHUNK_SIZE`, `T1_NUM_LAYERS`, `T2_NUM_LAYERS`, `MAX_LEN`, and other hyperparameters.
 
-Edit `run_curriculum.sh` to configure:
-- `CHUNK_SIZE`: Tokens per chunk (1 or 2) — also determines curriculum step size
-- `T1_NUM_LAYERS`: Layers in aggregation module (default: 2)
-- `T2_NUM_LAYERS`: Layers in prediction module (default: 2)
-- `MAX_LEN`: Final curriculum length
-- `EVAL_LOSS_THRESHOLD`: Early stopping threshold
-- `NUM_STORIES`, `EPOCHS`, `BATCH_SIZE`: Training hyperparameters
-
----
-
-## Directory Structure
-
-### Datasets
-```
-state_tracking/datasets/
-├── permutation_5_2/     # S5, max_len=2
-│   ├── train.pt
-│   └── val.pt
-├── permutation_5_3/     # S5, max_len=3
-├── ...
-└── permutation_5_18/    # S5, max_len=18
-```
-
-Datasets are generated once and reused. The training script skips generation if the directory exists.
-
-### Checkpoints
-
-Checkpoint directories are named: `tree_c{chunk_size}_T1-{T1_layers}_T2-{T2_layers}_len{max_len}`
-
-**Interactive runs** (default):
-```
-state_tracking/saved_models/
-├── tree_c1_T1-1_T2-1_len2/    # chunk_size=1, T1=1, T2=1, max_len=2
-├── tree_c1_T1-1_T2-1_len3/
-├── tree_c2_T1-2_T2-2_len2/    # chunk_size=2, T1=2, T2=2, max_len=2
-└── ...
-```
-
-**SLURM batch jobs** (versioned by job ID):
-```
-state_tracking/saved_models/
-├── job_284522/                 # Job ID prevents overwrites
-│   ├── tree_c2_T1-2_T2-2_len2/
-│   ├── tree_c2_T1-2_T2-2_len3/
-│   └── ...
-└── job_284600/
-    └── ...
-```
-
-Each checkpoint directory contains:
-- `model.safetensors` or `pytorch_model.bin`: Model weights
-- `config.json`: Model configuration
-- `training_args.bin`: Training arguments
-
-### Logs
-```
-state_tracking/logs/
-├── curriculum_284522.log    # stdout
-└── curriculum_284522.err    # stderr
-```
-
----
-
-## Manual Training (Interactive)
-
-### Single Length Training
+**Core command — single length:**
 
 ```bash
 python -m state_tracking.train \
@@ -103,65 +36,135 @@ python -m state_tracking.train \
     --batch_size 32 \
     --no-early_stopping \
     --generate_dataset \
+    --dataset_root state_tracking/datasets \
     --disable_wandb
 ```
 
-### Curriculum Learning (Step by Step)
+**Core command — curriculum step (e.g. length 3 from length 2):**
 
-**Step 1: Train on length 2**
-```bash
-python -m state_tracking.train \
-    --model tree --num_items 5 --max_len 2 \
-    --chunk_size 1 --T1_num_layers 1 --T2_num_layers 1 \
-    --num_stories 100000 --epochs 10 --batch_size 32 \
-    --no-early_stopping --generate_dataset --disable_wandb
-```
-
-**Step 2: Train on length 3 (from length 2 checkpoint)**
 ```bash
 python -m state_tracking.train \
     --model tree --num_items 5 --max_len 3 \
     --chunk_size 1 --T1_num_layers 1 --T2_num_layers 1 \
     --num_stories 100000 --epochs 10 --batch_size 32 \
     --from_checkpoint 2 \
-    --no-early_stopping --generate_dataset --disable_wandb
+    --no-early_stopping --generate_dataset \
+    --dataset_root state_tracking/datasets \
+    --disable_wandb
 ```
 
-**Continue for each length L from 4 to 18**, using `--from_checkpoint <L-1>`.
-
-**Note:** `--T1_num_layers` and `--T2_num_layers` must match between checkpoints for curriculum learning to work.
+Continue for each length using `--from_checkpoint <L-1>`. `--T1_num_layers` and `--T2_num_layers` must match across curriculum steps.
 
 ---
 
-## Evaluating Length Generalization
+### GPT-2
 
-After curriculum training, evaluate on sequences longer than training length.
+**Single-length training** at `max_len=18` (no curriculum):
 
-**Important:** Use the same `--chunk_size`, `--T1_num_layers`, `--T2_num_layers` as training.
+```bash
+sbatch state_tracking/scripts/run_gpt2.sh
+# Or locally:
+bash state_tracking/scripts/run_gpt2.sh
+```
 
-For `chunk_size=1, T1=1, T2=1`:
+**Core command:**
+
 ```bash
 python -m state_tracking.train \
-    --model tree --num_items 5 --max_len 18 \
-    --chunk_size 1 --T1_num_layers 1 --T2_num_layers 1 \
-    --from_checkpoint 18 \
-    --eval_lengths \
+    --model gpt2 \
+    --num_items 5 \
+    --max_len 18 \
+    --num_stories 1000000 \
+    --max_eval_samples 1000 \
+    --epochs 1 \
+    --batch_size 32 \
+    --learning_rate 1e-3 \
+    --no-early_stopping \
+    --output_dir state_tracking/saved_models \
+    --dataset_root state_tracking/datasets \
     --disable_wandb
 ```
 
-For `chunk_size=2, T1=2, T2=2`:
+---
+
+### Gated DeltaNet
+
+**Curriculum** from length 2 to 18:
+
+```bash
+sbatch state_tracking/scripts/run_curriculum_gated_deltanet.sh
+# Or locally:
+bash state_tracking/scripts/run_curriculum_gated_deltanet.sh
+```
+
+The script loops `max_len` 2, 3, …, 18 and uses `--from_checkpoint <prev_len>` to chain checkpoints.
+
+**Core command (one length, e.g. max_len=2):**
+
 ```bash
 python -m state_tracking.train \
-    --model tree --num_items 5 --max_len 18 \
-    --chunk_size 2 --T1_num_layers 2 --T2_num_layers 2 \
-    --from_checkpoint 18 \
-    --eval_lengths \
+    --model gated_deltanet \
+    --num_items 5 \
+    --max_len 2 \
+    --num_stories 1000000 \
+    --max_eval_samples 1000 \
+    --epochs 10 \
+    --batch_size 32 \
+    --learning_rate 1e-3 \
+    --no-early_stopping \
+    --eval_loss_threshold 0.001 \
+    --output_dir state_tracking/saved_models \
+    --dataset_root state_tracking/datasets \
+    --generate_dataset \
     --disable_wandb
 ```
 
-This generates plots in the checkpoint directory:
-- `length_generalisation_loss_*.png`
-- `length_generalisation_error_*.png`
+For the next length use `--max_len <L>` and `--from_checkpoint <L-1>`.
+
+---
+
+### Gated Linear Attention (GLA)
+
+**Curriculum** from length 2 to 18:
+
+```bash
+sbatch state_tracking/scripts/run_curriculum_gla.sh
+# Or locally:
+bash state_tracking/scripts/run_curriculum_gla.sh
+```
+
+**Core command (one length, e.g. max_len=2):**
+
+```bash
+python -m state_tracking.train \
+    --model gla \
+    --num_items 5 \
+    --max_len 2 \
+    --num_stories 1000000 \
+    --max_eval_samples 1000 \
+    --epochs 10 \
+    --batch_size 32 \
+    --learning_rate 3e-3 \
+    --no-early_stopping \
+    --eval_loss_threshold 0.001 \
+    --output_dir state_tracking/saved_models \
+    --dataset_root state_tracking/datasets \
+    --generate_dataset \
+    --disable_wandb
+```
+
+Chain lengths with `--from_checkpoint <L-1>` as in the Gated DeltaNet script.
+
+---
+
+## Summary
+
+| Model                       | Script                             | Mode                         | Conda env |
+|-----------------------------|------------------------------------|------------------------------|-----------|
+| TransformerScanModel (tree) | `run_curriculum.sh`                | Curriculum (→ MAX_LEN)       | base      |
+| GPT-2                       | `run_gpt2.sh`                      | Single length (max_len=18)   | fla2      |
+| Gated DeltaNet              | `run_curriculum_gated_deltanet.sh`  | Curriculum (2→18)            | fla2      |
+| GLA                         | `run_curriculum_gla.sh`            | Curriculum (2→18)            | fla2      |
 
 ---
 
@@ -169,26 +172,31 @@ This generates plots in the checkpoint directory:
 
 | Argument | Description |
 |----------|-------------|
-| `--model tree` | Use Tree Model architecture |
-| `--chunk_size` | Tokens per chunk (1 = finest granularity) |
-| `--T1_num_layers` | Layers in aggregation module (default: 1) |
-| `--T2_num_layers` | Layers in prediction module (default: 1) |
+| `--model` | One of `tree`, `gpt2`, `gated_deltanet`, `gla` |
+| `--chunk_size` | Tokens per chunk (tree only; 1 = finest granularity) |
+| `--T1_num_layers` | Layers in aggregation module (tree only; default: 1) |
+| `--T2_num_layers` | Layers in prediction module (tree only; default: 1) |
 | `--num_items` | Permutation group size (5 for S5) |
 | `--max_len` | Sequence length for training |
 | `--from_checkpoint <L>` | Initialize from checkpoint trained on max_len=L |
-| `--eval_lengths` | Skip training, evaluate on multiple lengths |
-| `--eval_loss_threshold` | Stop if eval_loss falls below threshold |
-| `--generate_dataset` | Generate dataset (skipped if exists) |
-| `--output_dir` | Override default checkpoint directory |
-| `--dataset_root` | Override default dataset directory |
-| `--disable_wandb` | Disable Weights & Biases logging |
-| `--no-early_stopping` | Disable early stopping callback |
+| `--num_stories` | Number of training stories (dataset size) |
+| `--max_eval_samples` | Max evaluation samples (GPT-2 / Gated DeltaNet / GLA) |
+| `--learning_rate` | Learning rate |
+| `--eval_loss_threshold` | Stop training if eval_loss drops below this |
+| `--eval_lengths` | Skip training, evaluate on multiple lengths (tree) |
+| `--generate_dataset` | Generate dataset if missing |
+| `--output_dir` | Checkpoint directory |
+| `--dataset_root` | Root for datasets (e.g. `state_tracking/datasets`) |
+| `--disable_wandb` | Disable Weights & Biases |
+| `--no-early_stopping` | Disable early stopping |
 
 ---
 
-## Generating Datasets Manually
+## Datasets
 
-To pre-generate datasets before training:
+Datasets live under `state_tracking/datasets/permutation_5_{max_len}/` (e.g. `permutation_5_18`). They are generated automatically when missing, or when `--generate_dataset` is passed. Generated data is reused across runs.
+
+**Pre-generate manually:**
 
 ```bash
 python -m state_tracking.permutation_task \
@@ -198,3 +206,30 @@ python -m state_tracking.permutation_task \
     --train_ratio 0.9 \
     --story_length 10
 ```
+
+---
+
+## Checkpoints and Logs
+
+- **Checkpoints:** written to `state_tracking/saved_models/`. With SLURM, scripts use `state_tracking/saved_models/job_${SLURM_JOB_ID}/` to avoid overwrites. Checkpoint names include model and length (e.g. `tree_c1_T1-1_T2-1_len18`, `gated_deltanet_len18`, `gla_len18`).
+- **Logs:** `state_tracking/logs/` is gitignored; nothing there is required to reproduce experiments.
+
+---
+
+## Evaluating Length Generalization (tree)
+
+After curriculum training, evaluate the tree model on longer sequences. Use the same `--chunk_size`, `--T1_num_layers`, `--T2_num_layers` as in training.
+
+Example for `chunk_size=1`, `T1=1`, `T2=1`:
+
+```bash
+python -m state_tracking.train \
+    --model tree --num_items 5 --max_len 18 \
+    --chunk_size 1 --T1_num_layers 1 --T2_num_layers 1 \
+    --from_checkpoint 18 \
+    --eval_lengths \
+    --dataset_root state_tracking/datasets \
+    --disable_wandb
+```
+
+This produces length-generalization plots in the checkpoint directory (`length_generalisation_loss_*.png`, `length_generalisation_error_*.png`). For GPT-2, Gated DeltaNet, and GLA, evaluation follows the same `python -m state_tracking.train` interface; use the script’s checkpoint path and the same `--model` and `--max_len` as in training.
