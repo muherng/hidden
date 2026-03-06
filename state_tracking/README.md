@@ -4,8 +4,26 @@ This module runs state tracking experiments on the S5 permutation task with curr
 
 ## Prerequisites
 
-- Python and Conda. Run all commands from the **repository root** (the directory that contains `state_tracking/`).
-- **Conda environments:** use `base` for the tree model; use `fla2` (or an environment with the same dependencies) for GPT-2, Gated DeltaNet, and GLA. The scripts source conda and activate these envs by default; on a different machine, either activate the correct env before running or edit the `source` and `conda activate` lines in the script.
+- Python 3.10+ and Conda (or Miniforge). Run all commands from the **repository root** (the directory that contains `state_tracking/`).
+- A CUDA-capable GPU is required for training.
+
+### Environment setup
+
+Two conda environment files are provided at the repository root:
+
+| File | Env name | Used by |
+|------|----------|---------|
+| `base.yml` | `base` | TransformerScanModel (tree) |
+| `fla.yml` | `fla2` | GPT-2, Gated DeltaNet, GLA |
+
+Create them with:
+
+```bash
+conda env create -f base.yml
+conda env create -f fla.yml
+```
+
+The training scripts source conda and activate the appropriate env automatically. On a different machine you may need to edit the `source` line in the scripts to point to your conda installation, or simply activate the env yourself before running.
 
 ## Reproducing Experiments
 
@@ -19,9 +37,9 @@ sbatch state_tracking/scripts/run_curriculum.sh
 bash state_tracking/scripts/run_curriculum.sh
 ```
 
-**Curriculum sequence:** `chunk_size`, `2*chunk_size`, … → `MAX_LEN` (e.g. for `CHUNK_SIZE=1`, `MAX_LEN=18`: lengths 1, 2, …, 18). Edit `run_curriculum.sh` for `CHUNK_SIZE`, `T1_NUM_LAYERS`, `T2_NUM_LAYERS`, `MAX_LEN`, and other hyperparameters.
+**Curriculum sequence:** `chunk_size`, `2*chunk_size`, ..., `MAX_LEN` (e.g. for `CHUNK_SIZE=1`, `MAX_LEN=18`: lengths 1, 2, ..., 18). Edit `run_curriculum.sh` for `CHUNK_SIZE`, `T1_NUM_LAYERS`, `T2_NUM_LAYERS`, `MAX_LEN`, and other hyperparameters.
 
-**Core command — single length:**
+**Core command -- single length:**
 
 ```bash
 python -m state_tracking.train \
@@ -40,7 +58,7 @@ python -m state_tracking.train \
     --disable_wandb
 ```
 
-**Core command — curriculum step (e.g. length 3 from length 2):**
+**Core command -- curriculum step (e.g. length 3 from length 2):**
 
 ```bash
 python -m state_tracking.train \
@@ -97,7 +115,7 @@ sbatch state_tracking/scripts/run_curriculum_gated_deltanet.sh
 bash state_tracking/scripts/run_curriculum_gated_deltanet.sh
 ```
 
-The script loops `max_len` 2, 3, …, 18 and uses `--from_checkpoint <prev_len>` to chain checkpoints.
+The script loops `max_len` 2, 3, ..., 18 and uses `--from_checkpoint <prev_len>` to chain checkpoints.
 
 **Core command (one length, e.g. max_len=2):**
 
@@ -161,10 +179,10 @@ Chain lengths with `--from_checkpoint <L-1>` as in the Gated DeltaNet script.
 
 | Model                       | Script                             | Mode                         | Conda env |
 |-----------------------------|------------------------------------|------------------------------|-----------|
-| TransformerScanModel (tree) | `run_curriculum.sh`                | Curriculum (→ MAX_LEN)       | base      |
+| TransformerScanModel (tree) | `run_curriculum.sh`                | Curriculum (-> MAX_LEN)      | base      |
 | GPT-2                       | `run_gpt2.sh`                      | Single length (max_len=18)   | fla2      |
-| Gated DeltaNet              | `run_curriculum_gated_deltanet.sh`  | Curriculum (2→18)            | fla2      |
-| GLA                         | `run_curriculum_gla.sh`            | Curriculum (2→18)            | fla2      |
+| Gated DeltaNet              | `run_curriculum_gated_deltanet.sh` | Curriculum (2->18)           | fla2      |
+| GLA                         | `run_curriculum_gla.sh`            | Curriculum (2->18)           | fla2      |
 
 ---
 
@@ -232,4 +250,22 @@ python -m state_tracking.train \
     --disable_wandb
 ```
 
-This produces length-generalization plots in the checkpoint directory (`length_generalisation_loss_*.png`, `length_generalisation_error_*.png`). For GPT-2, Gated DeltaNet, and GLA, evaluation follows the same `python -m state_tracking.train` interface; use the script’s checkpoint path and the same `--model` and `--max_len` as in training.
+This produces length-generalization plots in the checkpoint directory (`length_generalisation_loss_*.png`, `length_generalisation_error_*.png`). For GPT-2, Gated DeltaNet, and GLA, evaluation follows the same `python -m state_tracking.train` interface; use the script's checkpoint path and the same `--model` and `--max_len` as in training.
+
+---
+
+## Smoke Tests
+
+A lightweight test suite verifies that the environment files are present and that the training pipeline runs end-to-end.
+
+```bash
+# With pytest (from repo root):
+pytest state_tracking/tests/test_smoke.py -v
+
+# Or without pytest:
+python state_tracking/tests/test_smoke.py
+```
+
+The tests check:
+1. `base.yml` and `fla.yml` exist and define the expected env names (`base` and `fla2`).
+2. A single training step of the tree model completes successfully (requires CUDA; skipped automatically on CPU-only machines).
