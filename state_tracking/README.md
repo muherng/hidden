@@ -117,6 +117,14 @@ bash state_tracking/scripts/run_curriculum_gated_deltanet.sh
 
 The script loops `max_len` 2, 3, ..., 18 and uses `--from_checkpoint <prev_len>` to chain checkpoints.
 
+**Single-length training** at `max_len=18` (no curriculum):
+
+```bash
+sbatch state_tracking/scripts/run_gated_deltanet.sh
+# Or locally:
+bash state_tracking/scripts/run_gated_deltanet.sh
+```
+
 **Core command (one length, e.g. max_len=2):**
 
 ```bash
@@ -151,6 +159,14 @@ sbatch state_tracking/scripts/run_curriculum_gla.sh
 bash state_tracking/scripts/run_curriculum_gla.sh
 ```
 
+**Single-length training** at `max_len=18` (no curriculum):
+
+```bash
+sbatch state_tracking/scripts/run_gla.sh
+# Or locally:
+bash state_tracking/scripts/run_gla.sh
+```
+
 **Core command (one length, e.g. max_len=2):**
 
 ```bash
@@ -182,7 +198,9 @@ Chain lengths with `--from_checkpoint <L-1>` as in the Gated DeltaNet script.
 | TransformerScanModel (tree) | `run_curriculum.sh`                | Curriculum (-> MAX_LEN)      | base      |
 | GPT-2                       | `run_gpt2.sh`                      | Single length (max_len=18)   | fla2      |
 | Gated DeltaNet              | `run_curriculum_gated_deltanet.sh` | Curriculum (2->18)           | fla2      |
+| Gated DeltaNet              | `run_gated_deltanet.sh`            | Single length (max_len=18)   | fla2      |
 | GLA                         | `run_curriculum_gla.sh`            | Curriculum (2->18)           | fla2      |
+| GLA                         | `run_gla.sh`                       | Single length (max_len=18)   | fla2      |
 
 ---
 

@@ -70,5 +70,5 @@ fi
 echo ""
 echo "============================================"
 echo "Training complete!"
-echo "Model saved to: ${CHECKPOINT_DIR}/${MODEL}_c64_T1-1_T2-1_len${MAX_LEN}/"
+echo "Model saved to: ${CHECKPOINT_DIR}/${MODEL}_len${MAX_LEN}/"
 echo "============================================"
