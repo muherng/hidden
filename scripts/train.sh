@@ -1,24 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=compressed
-#SBATCH --output=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden/logs/%A/%A_%a.out
-#SBATCH --error=/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden/logs/%A/%A_%a.err
-#SBATCH --account=vision-phillipi
-#SBATCH --partition=vision-phillipi
-#SBATCH --qos=vision-phillipi-main
+#SBATCH --job-name=tree_scan
+#SBATCH --output=logs/%A/%A_%a.out
+#SBATCH --error=logs/%A/%A_%a.err
 #SBATCH --gres=gpu:1
 #SBATCH --time=96:00:00
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=16G
-#SBATCH --nodelist=isola-h200-1
-#SBATCH --array=0-0  # dummy; will be overridden by the launcher
+#SBATCH --array=0-0  # overridden by the launcher below
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_ROOT="$(dirname "$SCRIPT_DIR")"
+CONFIG_PATH="${PROJ_ROOT}/scripts/train.yaml"
 
 # ----------------------------
 # Self-Submission Launcher
 # ----------------------------
 if [ -z "$SLURM_JOB_ID" ]; then
-  CONFIG_PATH=scripts/train.yaml
-
-  echo "🚧 [Launcher] Computing number of combinations from $CONFIG_PATH"
+  echo "[Launcher] Computing number of combinations from $CONFIG_PATH"
   NUM_JOBS=$(python3 - <<EOF
 import yaml
 from itertools import product
@@ -30,41 +28,25 @@ print(len(combinations))
 EOF
   )
 
-  echo "🔢 [Launcher] Detected $NUM_JOBS job combinations."
-  echo "🚀 [Launcher] Submitting array job..."
+  echo "[Launcher] Detected $NUM_JOBS job combinations."
+  echo "[Launcher] Submitting array job..."
   sbatch --array=0-$((NUM_JOBS - 1)) "$0"
   exit 0
 fi
 
-
 # ----------------------------
 # SLURM JOB SECTION (Compute Node)
 # ----------------------------
-echo "🔢 [SLURM Job] Running job with task ID: $SLURM_ARRAY_TASK_ID"
+echo "[SLURM Job] Running job with task ID: $SLURM_ARRAY_TASK_ID"
 
-# Set up the environment
-source /data/vision/torralba/selfmanaged/isola/u/sharut/.bashrc_hpc
-source /data/scratch/sharut/anaconda3/etc/profile.d/conda.sh
-conda activate /data/scratch/sharut/anaconda3/envs/multimae
-
-# Debug info
-echo "==== Conda Environment List ===="
-conda env list
+conda activate base
 
 echo "==== Python path and version ===="
 which python
 python --version
-
-echo "==== Checking if torch is installed ===="
 python -c "import torch; print('PyTorch version:', torch.__version__)"
 
-# Set Python path and change directory
-export PYTHONPATH=$PYTHONPATH:/data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden
-cd /data/vision/torralba/selfmanaged/isola/projects/sharut/code/Compressive-Transformer/hidden
+export PYTHONPATH="${PROJ_ROOT}:${PYTHONPATH}"
+cd "$PROJ_ROOT"
 
-# Run your Python script
-#with slurm 
-#python models/tree_model6.py -s -c scripts/train.yaml
-
-#without slurm in interactive mode 
-python models/tree_model6.py -c scripts/train.yaml
+python -m models.tree_model6 -c scripts/train.yaml

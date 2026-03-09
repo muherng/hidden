@@ -1,161 +1,259 @@
-# Setup
+# TransformerScanModel
 
-## Environment
+A GPT-2-based language model that replaces standard causal self-attention with a
+binary-tree parallel prefix scan (Blelloch scan) for sequence aggregation. The
+architecture splits processing into three modules:
 
-Load the conda environment:
+- **T0** -- token embedding
+- **T1** -- aggregation via GPT-2 blocks *without* causal masking, composed through a prefix scan tree
+- **T2** -- autoregressive prediction via standard causal GPT-2 blocks
 
-```bash
-conda env create -f base_env.yml
-conda activate base_env
+The model is trained on WikiText-103 and compared against GPT-2 Small (125M),
+Gated Linear Attention (GLA), and Gated DeltaNet at matched parameter counts.
+
+---
+
+## Repository Structure
+
 ```
-
-## Training TransformerScanModel
-
-Run the training script:
-
-```bash
-python -m models.tree_model6 -c scripts/train.yaml
-```
-
-> **Note:** A wandb interface will appear — press `3` to ignore. There is also a long loading time to tokenize the wikitext dataset.
-
-## Inference
-
-Run the inference script:
-
-```bash
-python -m inference_experiments.inf_plot --batch_size 32 --max_new_tokens 5000
+models/
+├── tree_model6.py           # TransformerScanModel (T0/T1/T2) + training loop
+├── blelloch_scan.py         # Blelloch parallel prefix scan
+├── train_gpt2_small.py      # GPT-2 Small trainer (HuggingFace Trainer)
+├── tree.py, tree_ar.py, ... # Earlier model iterations (kept for reference)
+scripts/
+├── train.sh                 # SLURM launcher for TransformerScanModel
+├── train.yaml               # TransformerScanModel hyperparameters
+├── train_comparison.sh      # Shell wrapper to train comparison models
+├── train_comparison.py      # Comparison training orchestrator
+├── evaluate_comparison.py   # Evaluation (perplexity, loss curves, comparison plots)
+└── model_registry.yaml      # Central registry of all comparison models + defaults
+flame/
+├── flame/                   # Flame training infrastructure (fla library)
+├── configs/                 # Model architecture configs (JSON)
+│   ├── gla_170M.json
+│   ├── gated_deltanet_170M.json
+│   ├── gpt2_small.json
+│   └── ...
+├── train.sh                 # Flame SLURM training script
+└── exp/                     # Experiment outputs (gitignored)
+inference_experiments/
+└── inf_plot.py              # Inference speed benchmark (TransformerScanModel vs GPT-2)
+state_tracking/              # S5 permutation experiments (see state_tracking/README.md)
 ```
 
 ---
 
-# Model Comparison Framework
+## Environment Setup
 
-This framework allows systematic comparison of TransformerScanModel against various baseline models (GLA, Gated DeltaNet, Mamba, etc.) using unified training and evaluation pipelines.
+Two conda environments are required. The environment files are at the repository root.
 
-## Quick Start
+| File | Env name | Python | PyTorch | Used by |
+|------|----------|--------|---------|---------|
+| `base.yml` | `base` | 3.12 | 2.6 | TransformerScanModel |
+| `fla.yml` | `fla2` | 3.10 | 2.9 | GPT-2 Small, GLA, Gated DeltaNet (flash-linear-attention + flame) |
 
 ```bash
-# List all available comparison models
+conda env create -f base.yml
+conda env create -f fla.yml
+```
+
+---
+
+## Training TransformerScanModel
+
+Activate the `base` environment and run from the repository root:
+
+```bash
+conda activate base
+python -m models.tree_model6 -c scripts/train.yaml
+```
+
+The default config (`scripts/train.yaml`) trains on WikiText-103 with these settings:
+
+| Parameter | Value |
+|-----------|-------|
+| dataset | wikitext-103 |
+| model_size | base (GPT-2 base: 768 hidden, 12 heads) |
+| train_mode | sequential |
+| T1 layers | 1 |
+| T2 layers | 12 |
+| seq_len | 512 |
+| chunk_size | 512 |
+| batch_size | 64 |
+| epochs | 20 |
+
+To submit via SLURM:
+
+```bash
+bash scripts/train.sh
+```
+
+The script auto-detects sweep combinations from `train.yaml` and submits a SLURM
+array job. Edit the SLURM headers in `scripts/train.sh` for your cluster.
+
+> **Note:** A wandb prompt may appear on first run -- press `3` to skip.
+> The initial tokenization of WikiText-103 takes several minutes.
+
+---
+
+## Training Comparison Models
+
+Comparison models (GPT-2 Small, GLA, Gated DeltaNet, etc.) are trained through
+a unified pipeline. Activate the `fla2` environment:
+
+```bash
+conda activate fla2
+```
+
+### Quick start
+
+```bash
+# List all registered models
 ./scripts/train_comparison.sh --list
+
+# Train GPT-2 Small on WikiText-103 (submit to SLURM)
+./scripts/train_comparison.sh gpt2_small_wikitext103_drop01
 
 # Train GLA-170M (submit to SLURM)
 ./scripts/train_comparison.sh gla_170M
 
-# Train Gated DeltaNet (run locally)
-./scripts/train_comparison.sh gated_deltanet_340M --local
+# Train locally instead of SLURM
+./scripts/train_comparison.sh gla_170M --local
 
-# Evaluate checkpoints
-python scripts/evaluate_comparison.py --exp_path flame/exp/gla_170M-wikitext103-...
-
-# Compare multiple experiments
-python scripts/evaluate_comparison.py --compare \
-    flame/exp/gla_170M-... \
-    flame/exp/gated_deltanet_340M-...
+# Dry run (show commands without executing)
+./scripts/train_comparison.sh gla_170M --dry_run
 ```
 
-## Adding a New Comparison Model
+### Key WikiText-103 model IDs
 
-To add a new model (e.g., "my_model"):
+| Model ID | Description | Key differences from defaults |
+|----------|-------------|-------------------------------|
+| `gla_170M` | 170M GLA | defaults |
+| `gla_170M_baseline` | 170M GLA, GPT-2-matched | expand_k=1, tie_word_embeddings |
+| `gated_deltanet_170M` | 170M Gated DeltaNet | defaults |
+| `gated_deltanet_170M_baseline` | 170M Gated DeltaNet, GPT-2-matched | expand_v=1, num_heads=12, no short_conv |
+| `gpt2_small_wikitext103_drop01` | 125M GPT-2 Small, dropout=0.1 | lr=1e-4, beta2=0.999, 30518 steps |
+| `gpt2_small_wikitext103_nodrop` | 125M GPT-2 Small, no dropout | lr=1e-4, beta2=0.999, 30518 steps |
 
-### 1. Add the model config JSON (if not already in flame/configs/)
+### Default training hyperparameters
 
-Create `flame/configs/my_model_170M.json` with the appropriate architecture config.
+Defined in `scripts/model_registry.yaml`:
 
-### 2. Register the model in `scripts/model_registry.yaml`
+| Parameter | Value |
+|-----------|-------|
+| dataset | wikitext-103-raw-v1 |
+| batch_size | 64 |
+| seq_len | 512 |
+| learning_rate | 1e-3 |
+| warmup_steps | 1000 |
+| weight_decay | 0.01 |
+| dropout | 0.1 |
+| lr_decay | cosine |
+| total_steps | 62,900 (~20 epochs) |
+| tokenizer | gpt2 |
 
-```yaml
-models:
-  # ... existing models ...
-  
-  my_model_170M:
-    name: "My-Model-170M"
-    model_type: my_model          # Must match fla's model type
-    config: configs/my_model_170M.json
-    description: "170M parameter My Model"
-    # Optional overrides (uses defaults if not specified):
-    batch_size: 64                # Override if needed
-    learning_rate: 1.0e-4
-```
-
-### 3. Train the model
-
-```bash
-./scripts/train_comparison.sh my_model_170M
-```
-
-### 4. Evaluate
-
-```bash
-python scripts/evaluate_comparison.py --exp_path flame/exp/my_model_170M-...
-```
-
-## Available Models
-
-| Model ID | Name | Description |
-|----------|------|-------------|
-| `gla_170M` | GLA-170M | 170M Gated Linear Attention |
-| `gla_340M` | GLA-340M | 340M Gated Linear Attention |
-| `gated_deltanet_340M` | Gated-DeltaNet-340M | 340M Gated DeltaNet |
-| `gated_deltanet_1B` | Gated-DeltaNet-1B | 1B Gated DeltaNet |
-| `delta_net_340M` | DeltaNet-340M | 340M DeltaNet |
-| `mamba_340M` | Mamba-340M | 340M Mamba |
-| `mamba2_340M` | Mamba2-340M | 340M Mamba2 |
-| `transformer_340M` | Transformer-340M | 340M Transformer baseline |
-| `gsa_340M` | GSA-340M | 340M Gated Slot Attention |
-| `hgrn2_340M` | HGRN2-340M | 340M HGRN2 |
-
-## File Structure
-
-```
-scripts/
-├── model_registry.yaml       # Central registry of all comparison models
-├── train_comparison.py       # Generic training script
-├── train_comparison.sh       # Shell wrapper for easy invocation
-├── evaluate_comparison.py    # Generic evaluation script
-└── train.yaml                # TransformerScanModel config
-
-flame/
-├── configs/                  # Model architecture configs (JSON)
-│   ├── gla_170M.json
-│   ├── gated_deltanet_340M.json
-│   └── ...
-└── exp/                      # Experiment outputs
-    └── <model>-wikitext103-<timestamp>/
-        ├── checkpoint/
-        ├── hf-<step>/        # Converted HF checkpoints
-        ├── eval_results.json
-        └── eval_curve.png
-```
-
-## Training Options
+### Additional options
 
 ```bash
 # Custom experiment name
-./scripts/train_comparison.sh gla_170M --exp_name my_custom_name
+./scripts/train_comparison.sh gla_170M --exp_name my_experiment
 
 # Override hyperparameters
 ./scripts/train_comparison.sh gla_170M --batch_size 32 --lr 5e-5
 
-# Dry run (show commands without executing)
-./scripts/train_comparison.sh gla_170M --dry_run
-
-# Different SLURM profile
+# Different SLURM profile (see model_registry.yaml for profiles)
 ./scripts/train_comparison.sh gla_170M --profile vision
 
 # Disable wandb
 ./scripts/train_comparison.sh gla_170M --no_wandb
 ```
 
-## Evaluation Options
+---
+
+## Evaluation
+
+Evaluate trained checkpoints with `scripts/evaluate_comparison.py`:
 
 ```bash
+conda activate fla2
+
+# Evaluate a single experiment
+python scripts/evaluate_comparison.py --exp_path flame/exp/<experiment_dir>
+
 # Evaluate specific checkpoint steps
 python scripts/evaluate_comparison.py --exp_path flame/exp/... --steps 5000 10000 20000
 
-# Different dataset
-python scripts/evaluate_comparison.py --exp_path flame/exp/... --dataset wikitext-2
+# Compare multiple experiments
+python scripts/evaluate_comparison.py --compare \
+    flame/exp/gla_170M-wikitext103-... \
+    flame/exp/gated_deltanet_170M-wikitext103-...
 
-# Custom batch size for evaluation
-python scripts/evaluate_comparison.py --exp_path flame/exp/... --batch_size 16
+# Different evaluation dataset
+python scripts/evaluate_comparison.py --exp_path flame/exp/... --dataset wikitext-2
 ```
+
+The script handles both flame DCP checkpoints and HuggingFace checkpoints,
+converting DCP to HuggingFace format when needed. Outputs include validation
+loss, perplexity, and optional comparison plots.
+
+---
+
+## Inference Speed Benchmark
+
+`inference_experiments/inf_plot.py` benchmarks autoregressive generation speed,
+comparing TransformerScanModel against vanilla GPT-2 with KV caching. Both
+models are randomly initialized -- this measures computational scaling, not
+generation quality.
+
+The script generates `max_new_tokens` tokens from a WikiText-2 prompt, timing
+each token individually. Flash and memory-efficient SDPA are disabled so that
+vanilla GPT-2 attention uses the standard O(L^2) kernel, making the asymptotic
+difference visible.
+
+```bash
+conda activate base
+python -m inference_experiments.inf_plot --batch_size 1 --max_new_tokens 5000
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--batch_size` | 1 | Batch size |
+| `--max_new_tokens` | 10000 | Number of tokens to generate |
+| `--prompt_len` | 100 | Prompt length (tokens from WikiText-2) |
+| `--chunk_size` | 64 | Chunk size for TransformerScanModel |
+| `--seed` | 42 | Random seed |
+| `--device` | cuda | Device (cuda or cpu) |
+
+Output: `inference_speed.png` -- time per token vs token index for both models.
+
+---
+
+## Adding a New Comparison Model
+
+1. Create a model config JSON in `flame/configs/` (e.g., `my_model_170M.json`).
+2. Register the model in `scripts/model_registry.yaml`:
+
+```yaml
+models:
+  my_model_170M:
+    name: "My-Model-170M"
+    model_type: my_model
+    config: configs/my_model_170M.json
+    description: "170M parameter My Model"
+    # Optional overrides:
+    batch_size: 64
+    learning_rate: 1.0e-4
+```
+
+3. Train: `./scripts/train_comparison.sh my_model_170M`
+4. Evaluate: `python scripts/evaluate_comparison.py --exp_path flame/exp/my_model_170M-...`
+
+---
+
+## State Tracking Experiments
+
+S5 permutation state-tracking experiments (TransformerScanModel, GPT-2, GLA,
+Gated DeltaNet with curriculum learning) live in the `state_tracking/` directory.
+See [`state_tracking/README.md`](state_tracking/README.md) for setup and
+reproduction instructions.

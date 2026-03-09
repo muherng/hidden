@@ -21,6 +21,18 @@ vector_gpt_trainer/**
 
 src/out
 
+# IDE / editor
+.cursor/
+.vscode/
+.cursorignore
+.cursorindexingignore
+*.code-workspace
+
+# Root-level generated outputs
+saved_models/
+datasets_new/
+out/
+
 __pycache__/
 
 # Python cache files
